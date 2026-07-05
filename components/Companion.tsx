@@ -29,13 +29,16 @@ export default function Companion() {
           />
           <ul className="mt-8 space-y-3">
             {abilities.map((a, i) => (
-              <Reveal as="li" key={a} delay={i * 0.06}>
-                <li className="flex items-start gap-3">
-                  <span className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full bg-ok/15 text-ok">
-                    <Check className="h-3 w-3" />
-                  </span>
-                  <span className="text-sm text-slate-300">{a}</span>
-                </li>
+              <Reveal
+                as="li"
+                key={a}
+                delay={i * 0.06}
+                className="flex items-start gap-3"
+              >
+                <span className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full bg-ok/15 text-ok">
+                  <Check className="h-3 w-3" />
+                </span>
+                <span className="text-sm text-slate-300">{a}</span>
               </Reveal>
             ))}
           </ul>
