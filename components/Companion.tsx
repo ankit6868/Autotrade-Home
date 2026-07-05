@@ -99,7 +99,12 @@ export default function Companion() {
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <button className="btn-primary !px-3.5 !py-2 !text-xs">
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    aria-hidden="true"
+                    className="btn-primary !px-3.5 !py-2 !text-xs"
+                  >
                     Approve & continue
                   </button>
                   <span className="chip !text-[11px]">

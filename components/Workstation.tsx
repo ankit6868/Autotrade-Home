@@ -304,7 +304,12 @@ function RiskMock() {
         <span className="text-[12px] font-medium text-slate-200">
           Daily loss limit reached → agent paused
         </span>
-        <button className="flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/[0.05] px-2.5 py-1.5 text-[11px] font-semibold text-white">
+        <button
+          type="button"
+          tabIndex={-1}
+          aria-hidden="true"
+          className="flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/[0.05] px-2.5 py-1.5 text-[11px] font-semibold text-white"
+        >
           <Power className="h-3 w-3 text-danger" /> Kill switch
         </button>
       </div>

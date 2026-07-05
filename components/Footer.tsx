@@ -61,13 +61,14 @@ export default function Footer() {
             </p>
             <div className="mt-5 flex gap-2">
               {[
-                { icon: Twitter, href: site.social.x },
-                { icon: Send, href: site.social.telegram },
-                { icon: Github, href: site.social.github },
-              ].map((s, i) => (
+                { icon: Twitter, href: site.social.x, label: "X (Twitter)" },
+                { icon: Send, href: site.social.telegram, label: "Telegram" },
+                { icon: Github, href: site.social.github, label: "GitHub" },
+              ].map((s) => (
                 <a
-                  key={i}
+                  key={s.label}
                   href={s.href}
+                  aria-label={s.label}
                   className="grid h-9 w-9 place-items-center rounded-lg border border-white/10 bg-white/[0.03] text-slate-300 transition-colors hover:border-white/25 hover:text-white"
                 >
                   <s.icon className="h-4 w-4" />

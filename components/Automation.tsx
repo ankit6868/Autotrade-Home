@@ -100,7 +100,12 @@ export default function Automation() {
                   ))}
                 </div>
 
-                <button className="mt-4 flex w-full items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] py-2 text-xs font-medium text-slate-300 transition-colors hover:border-white/20">
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  aria-hidden="true"
+                  className="mt-4 flex w-full items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] py-2 text-xs font-medium text-slate-300 transition-colors hover:border-white/20"
+                >
                   <Pause className="h-3.5 w-3.5" />
                   {l.state === "Paused" ? "Resume agent" : "Pause agent"}
                 </button>

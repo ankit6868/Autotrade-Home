@@ -16,6 +16,8 @@
   }
   html {
     scroll-behavior: smooth;
+    /* Offset anchor jumps so sections don't hide under the fixed header. */
+    scroll-padding-top: 5rem;
     -webkit-font-smoothing: antialiased;
   }
   body {
