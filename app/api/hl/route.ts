@@ -19,6 +19,7 @@ const ALLOWED = new Set([
   "userNonFundingLedgerUpdates", // deposits / withdrawals / transfers
   "metaAndAssetCtxs", // per-coin market data (funding, OI, volume, price)
   "allMids", // mid prices
+  "candleSnapshot", // OHLC candles (for the liquidation heatmap price chart)
 ]);
 
 // Request types that require a `user` address (validated below).
