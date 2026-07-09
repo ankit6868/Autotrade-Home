@@ -31,8 +31,8 @@ const STALE_MS = 6 * 60 * 60 * 1000;
 const short = (a: string) => `${a.slice(0, 4)}…${a.slice(-2)}`;
 const moneyFull = (n: number) =>
   "$ " + Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const priceFmt = (n: number) =>
-  "$" + n.toLocaleString("en-US", { maximumFractionDigits: n >= 100 ? 1 : 4 });
+const priceFmt = (n?: number) =>
+  n == null || Number.isNaN(n) ? "—" : "$" + n.toLocaleString("en-US", { maximumFractionDigits: n >= 100 ? 1 : 4 });
 const sizeFmt = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 5 });
 const ago = (t: number) => {
   const s = Math.max(0, Math.floor((Date.now() - t) / 1000));

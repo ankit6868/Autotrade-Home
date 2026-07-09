@@ -188,7 +188,12 @@ export default function WalletDashboard({ address }: { address: string }) {
   const perfTrades = useMemo(() => filterWindow(trades, win), [trades, win]);
   const perf = useMemo(() => computeStats(perfTrades), [perfTrades]);
   const cutoff = Date.now() - windowMs(win);
-  const tradeCount = fills.filter((f) => f.time >= cutoff).length;
+  const inWindowFills = fills.filter((f) => f.time >= cutoff).length;
+  // Hyperliquid's userFills is capped at 2000. If every returned fill still
+  // falls inside the window, the true count is unknown but ≥2000 — show "2,000+"
+  // rather than a misleading flat 2000 for every active wallet.
+  const fillsCapped = fills.length >= 2000 && inWindowFills === fills.length;
+  const tradeCount = fillsCapped ? "2,000+" : inWindowFills.toLocaleString();
   const mdd = maxDrawdown(chartEntry?.[1].accountValueHistory);
 
   // Derived trader tags (from real fills / drawdown / exposure).
