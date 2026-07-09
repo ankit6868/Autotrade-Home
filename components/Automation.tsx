@@ -65,7 +65,7 @@ export default function Automation() {
           sub="Distinct rule sets across markets, each with separated capital and risk limits — and always observable, explainable and interruptible."
         />
 
-        <div className="mt-14 grid gap-4 lg:grid-cols-3">
+        <div className="mt-14 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {lanes.map((l, i) => (
             <Reveal key={l.name} delay={i * 0.08}>
               <div className="glass glass-hover h-full p-5">

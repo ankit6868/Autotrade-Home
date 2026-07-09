@@ -44,8 +44,8 @@ export default function Footer() {
   return (
     <footer className="border-t border-white/[0.08] bg-ink-950">
       <div className="container py-14">
-        <div className="grid gap-10 lg:grid-cols-[1.4fr_1fr_1fr_1fr_1fr]">
-          <div>
+        <div className="grid grid-cols-2 gap-8 sm:gap-10 lg:grid-cols-[1.4fr_1fr_1fr_1fr_1fr]">
+          <div className="col-span-2 lg:col-span-1">
             <div className="flex items-center gap-2.5">
               <span className="grid h-8 w-8 place-items-center rounded-lg bg-gradient-to-br from-brand-400 to-iris-500">
                 <span className="h-3.5 w-3.5 rounded-[3px] bg-ink-950" />

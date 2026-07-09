@@ -48,7 +48,7 @@ export default function HowItWorks() {
         <div className="relative mt-14">
           {/* connecting line (desktop) */}
           <div className="absolute left-0 right-0 top-[42px] hidden h-px bg-gradient-to-r from-transparent via-white/10 to-transparent lg:block" />
-          <div className="grid gap-4 lg:grid-cols-4">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {steps.map((s, i) => (
               <Reveal key={s.n} delay={i * 0.08}>
                 <div className="glass glass-hover h-full p-6">

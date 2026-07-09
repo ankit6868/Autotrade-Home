@@ -61,7 +61,7 @@ export default function Pricing() {
           sub="Unlock powerful trading tools, auto trading, backtesting and risk management. Longer terms add free months — same full toolset on every plan."
         />
 
-        <div className="mt-14 grid gap-4 lg:grid-cols-4">
+        <div className="mt-14 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {plans.map((p, i) => {
             const a = accents[p.accent];
             return (
