@@ -2,147 +2,209 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Copy, Check, TrendingUp, TrendingDown, Loader2 } from "lucide-react";
+import {
+  ArrowLeft, Copy, Check, Loader2, BarChart3, Bell, Users, Clock,
+} from "lucide-react";
+import {
+  n, money, compact, signed, pct, sizeFmt, ago, fmtDuration,
+  groupTrades, computeStats, maxDrawdown, filterWindow,
+  type Fill, type Trade, type Window,
+} from "@/lib/whale";
+import { Donut, Bar, Dropdown } from "./ui";
+import TradingStatsModal from "./TradingStatsModal";
 
-/* ── helpers ─────────────────────────────────────────────────────────────── */
-const money = (n: number, d = 2) =>
-  (n < 0 ? "-$" : "$") + Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
-const compact = (n: number) => {
-  const a = Math.abs(n);
-  const s = n < 0 ? "-$" : "$";
-  if (a >= 1e9) return `${s}${(a / 1e9).toFixed(2)}B`;
-  if (a >= 1e6) return `${s}${(a / 1e6).toFixed(2)}M`;
-  if (a >= 1e3) return `${s}${(a / 1e3).toFixed(1)}K`;
-  return money(n);
+/* ── HL response types ───────────────────────────────────────────────────── */
+type Pos = {
+  coin: string; szi: string; entryPx: string; positionValue: string; unrealizedPnl: string;
+  returnOnEquity: string; liquidationPx: string | null; leverage: { value: number; type: string };
+  marginUsed: string; cumFunding?: { sinceOpen: string };
 };
-const num = (v: unknown) => Number(v) || 0;
+type State = {
+  withdrawable: string;
+  marginSummary: { accountValue: string; totalNtlPos: string; totalMarginUsed: string };
+  assetPositions: { position: Pos }[];
+};
+type SpotBal = { coin: string; total: string; entryNtl?: string };
+type Portfolio = [string, { accountValueHistory: [number, string][]; pnlHistory: [number, string][] }][];
+type OpenOrder = { coin: string; side: string; limitPx: string; sz: string; timestamp: number; orderType?: string };
+type Funding = { time: number; delta: { coin: string; usdc: string; fundingRate: string; szi: string } };
 
 async function hl<T>(body: object): Promise<T | null> {
   try {
-    const r = await fetch("/api/hl", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    const r = await fetch("/api/hl", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     return (await r.json()) as T;
   } catch {
     return null;
   }
 }
 
-/* ── types ───────────────────────────────────────────────────────────────── */
-type Pos = { coin: string; szi: string; entryPx: string; positionValue: string; unrealizedPnl: string; returnOnEquity: string; liquidationPx: string | null; leverage: { value: number }; marginUsed: string };
-type Fill = { coin: string; dir: string; closedPnl: string; sz: string; px: string; time: number; fee: string };
-type Portfolio = [string, { accountValueHistory: [number, string][]; pnlHistory: [number, string][] }][];
+const TIME_OPTS = [{ label: "1W", value: "1W" as Window }, { label: "1M", value: "1M" as Window }, { label: "All", value: "All" as Window }];
+const SCOPE_OPTS = [{ label: "Perp Only", value: "perp" }, { label: "Total", value: "total" }];
+const METRIC_OPTS = [{ label: "Total PnL", value: "pnl" }, { label: "Account Value", value: "value" }];
+const WIN_NAME: Record<Window, [string, string]> = { "1W": ["week", "perpWeek"], "1M": ["month", "perpMonth"], All: ["allTime", "perpAllTime"] };
 
-const WINDOWS: { k: "1D" | "1W" | "1M" | "All"; base: string; perp: string }[] = [
-  { k: "1D", base: "day", perp: "perpDay" },
-  { k: "1W", base: "week", perp: "perpWeek" },
-  { k: "1M", base: "month", perp: "perpMonth" },
-  { k: "All", base: "allTime", perp: "perpAllTime" },
-];
+const TABS = ["Spot Holdings", "Perp Positions", "Open Orders", "Recent Fills", "Completed Trades", "Funding History"] as const;
+type Tab = (typeof TABS)[number];
 
-/* ── PnL area chart (SVG) ───────────────────────────────────────────────── */
-function PnlChart({ points }: { points: [number, string][] }) {
-  const W = 720, H = 240, P = 4;
-  if (points.length < 2) return <div className="grid h-[240px] place-items-center text-sm text-slate-500">No history in this window.</div>;
-  const ys = points.map((p) => num(p[1]));
-  const min = Math.min(...ys, 0), max = Math.max(...ys, 0);
-  const span = max - min || 1;
-  const x = (i: number) => P + (i / (points.length - 1)) * (W - 2 * P);
-  const y = (v: number) => P + (1 - (v - min) / span) * (H - 2 * P);
-  const line = points.map((p, i) => `${x(i)},${y(num(p[1]))}`).join(" ");
-  const area = `M${x(0)},${y(0)} L` + line + ` L${x(points.length - 1)},${y(0)} Z`;
+/* ── two-color PnL area chart ────────────────────────────────────────────── */
+function PnlChart({ points, height = 300 }: { points: [number, string][]; height?: number }) {
+  const W = 800, RIGHT = 78, P = 10;
+  const plotW = W - RIGHT;
+  if (!points || points.length < 2)
+    return <div className="grid place-items-center text-sm text-slate-500" style={{ height }}>No history in this window.</div>;
+  const ys = points.map((p) => n(p[1]));
+  let min = Math.min(...ys, 0), max = Math.max(...ys, 0);
+  if (min === max) { min -= 1; max += 1; }
+  const span = max - min;
+  const x = (i: number) => P + (i / (points.length - 1)) * (plotW - 2 * P);
+  const y = (v: number) => P + (1 - (v - min) / span) * (height - 2 * P);
+  const zeroY = y(0);
+  const line = points.map((p, i) => `${x(i)},${y(n(p[1]))}`).join(" ");
+  const area = `M${x(0)},${zeroY} L${line} L${x(points.length - 1)},${zeroY} Z`;
   const last = ys[ys.length - 1];
-  const up = last >= 0;
-  const col = up ? "#34d399" : "#f87171";
+  const ticks = Array.from({ length: 6 }, (_, i) => max - (span * i) / 5);
+
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="h-[240px] w-full" preserveAspectRatio="none">
+    <svg viewBox={`0 0 ${W} ${height}`} className="w-full" style={{ height }} preserveAspectRatio="none">
       <defs>
-        <linearGradient id="pg" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={col} stopOpacity="0.28" />
-          <stop offset="100%" stopColor={col} stopOpacity="0" />
-        </linearGradient>
+        <linearGradient id="gpos" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#34d399" stopOpacity="0.28" /><stop offset="100%" stopColor="#34d399" stopOpacity="0" /></linearGradient>
+        <linearGradient id="gneg" x1="0" x2="0" y1="1" y2="0"><stop offset="0%" stopColor="#f87171" stopOpacity="0.28" /><stop offset="100%" stopColor="#f87171" stopOpacity="0" /></linearGradient>
+        <clipPath id="clipAbove"><rect x="0" y="0" width={W} height={Math.max(0, zeroY)} /></clipPath>
+        <clipPath id="clipBelow"><rect x="0" y={zeroY} width={W} height={Math.max(0, height - zeroY)} /></clipPath>
       </defs>
-      <line x1={P} y1={y(0)} x2={W - P} y2={y(0)} stroke="rgba(255,255,255,0.12)" strokeDasharray="3 3" strokeWidth="1" />
-      <path d={area} fill="url(#pg)" />
-      <polyline points={line} fill="none" stroke={col} strokeWidth="2" strokeLinejoin="round" />
+      {ticks.map((tv, i) => {
+        const yy = y(tv);
+        return (
+          <g key={i}>
+            <line x1={P} y1={yy} x2={plotW} y2={yy} stroke="rgba(255,255,255,0.05)" strokeWidth="1" />
+            <text x={W - 4} y={yy + 3} textAnchor="end" fill="#64748b" fontSize="10">{compact(tv)}</text>
+          </g>
+        );
+      })}
+      <line x1={P} y1={zeroY} x2={plotW} y2={zeroY} stroke="rgba(255,255,255,0.2)" strokeDasharray="4 4" strokeWidth="1" />
+      <path d={area} fill="url(#gpos)" clipPath="url(#clipAbove)" />
+      <path d={area} fill="url(#gneg)" clipPath="url(#clipBelow)" />
+      <polyline points={line} fill="none" stroke="#34d399" strokeWidth="2" strokeLinejoin="round" clipPath="url(#clipAbove)" />
+      <polyline points={line} fill="none" stroke="#f87171" strokeWidth="2" strokeLinejoin="round" clipPath="url(#clipBelow)" />
+      <g>
+        <rect x={plotW - 2} y={Math.min(height - 18, Math.max(0, y(last) - 9))} width={72} height={18} rx={4} fill={last >= 0 ? "#065f46" : "#7f1d1d"} />
+        <text x={plotW + 34} y={Math.min(height - 5, Math.max(13, y(last) + 3))} textAnchor="middle" fill="#fff" fontSize="10" fontWeight="700">{compact(last)}</text>
+      </g>
     </svg>
   );
 }
 
-/* ── main ────────────────────────────────────────────────────────────────── */
+/* ── main dashboard ──────────────────────────────────────────────────────── */
 export default function WalletDashboard({ address }: { address: string }) {
-  const [state, setState] = useState<{ marginSummary: { accountValue: string; totalNtlPos: string }; withdrawable: string; assetPositions: { position: Pos }[] } | null>(null);
-  const [spot, setSpot] = useState<number>(0);
+  const [state, setState] = useState<State | null>(null);
+  const [spot, setSpot] = useState<SpotBal[]>([]);
+  const [mids, setMids] = useState<Record<string, string>>({});
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
   const [fills, setFills] = useState<Fill[]>([]);
+  const [orders, setOrders] = useState<OpenOrder[]>([]);
+  const [funding, setFunding] = useState<Funding[]>([]);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
-  const [win, setWin] = useState<"1D" | "1W" | "1M" | "All">("1W");
-  const [perp, setPerp] = useState(true);
+  const [monitored, setMonitored] = useState(false);
+  const [showStats, setShowStats] = useState(false);
+
+  const [win, setWin] = useState<Window>("1W");
+  const [scope, setScope] = useState("perp");
+  const [metric, setMetric] = useState("pnl");
+  const [tab, setTab] = useState<Tab>("Perp Positions");
 
   useEffect(() => {
     let alive = true;
     setLoading(true);
     Promise.all([
-      hl<typeof state>({ type: "clearinghouseState", user: address }),
-      hl<{ balances: { coin: string; total: string; entryNtl?: string }[] }>({ type: "spotClearinghouseState", user: address }),
+      hl<State>({ type: "clearinghouseState", user: address }),
+      hl<{ balances: SpotBal[] }>({ type: "spotClearinghouseState", user: address }),
+      hl<Record<string, string>>({ type: "allMids" }),
       hl<Portfolio>({ type: "portfolio", user: address }),
       hl<Fill[]>({ type: "userFills", user: address }),
-    ]).then(([cs, sp, pf, fl]) => {
+      hl<OpenOrder[]>({ type: "frontendOpenOrders", user: address }),
+      hl<Funding[]>({ type: "userFunding", user: address, startTime: Date.now() - 30 * 86_400_000 }),
+    ]).then(([cs, sp, md, pf, fl, oo, fn]) => {
       if (!alive) return;
       setState(cs);
-      setSpot((sp?.balances || []).reduce((s, b) => s + num(b.total) * (b.coin === "USDC" ? 1 : 0), 0));
+      setSpot((sp?.balances || []).filter((b) => n(b.total) > 0));
+      setMids(md || {});
       setPortfolio(pf);
       setFills(Array.isArray(fl) ? fl : []);
+      setOrders(Array.isArray(oo) ? oo : []);
+      setFunding(Array.isArray(fn) ? fn : []);
       setLoading(false);
     });
     return () => { alive = false; };
   }, [address]);
 
+  useEffect(() => {
+    try { setMonitored((JSON.parse(localStorage.getItem("whale_watch") || "[]") as string[]).includes(address)); } catch {}
+  }, [address]);
+
   const positions = useMemo(
-    () => (state?.assetPositions || []).map((p) => p.position).filter((p) => num(p.szi) !== 0).sort((a, b) => Math.abs(num(b.positionValue)) - Math.abs(num(a.positionValue))),
+    () => (state?.assetPositions || []).map((p) => p.position).filter((p) => n(p.szi) !== 0)
+      .sort((a, b) => Math.abs(n(b.positionValue)) - Math.abs(n(a.positionValue))),
     [state],
   );
+  const trades = useMemo(() => groupTrades(fills), [fills]);
 
-  const acctVal = num(state?.marginSummary.accountValue) + spot;
-  const totalNtl = num(state?.marginSummary.totalNtlPos);
-  const longVal = positions.filter((p) => num(p.szi) > 0).reduce((s, p) => s + num(p.positionValue), 0);
-  const shortVal = positions.filter((p) => num(p.szi) < 0).reduce((s, p) => s + num(p.positionValue), 0);
-  const uPnl = positions.reduce((s, p) => s + num(p.unrealizedPnl), 0);
+  const mid = (coin: string) => n(mids[coin]);
+  const spotValue = spot.reduce((s, b) => s + n(b.total) * (b.coin === "USDC" ? 1 : mid(b.coin) || (n(b.total) ? n(b.entryNtl) / n(b.total) : 0)), 0);
 
-  // Stats from recent fills.
-  const stats = useMemo(() => {
-    const closed = fills.filter((f) => num(f.closedPnl) !== 0);
-    const wins = closed.filter((f) => num(f.closedPnl) > 0).length;
-    const net = closed.reduce((s, f) => s + num(f.closedPnl), 0);
-    const top = [...closed].sort((a, b) => num(b.closedPnl) - num(a.closedPnl)).slice(0, 6);
-    return { count: closed.length, winRate: closed.length ? (wins / closed.length) * 100 : 0, net, top };
-  }, [fills]);
+  const perpVal = n(state?.marginSummary.accountValue);
+  const acctTotal = perpVal + spotValue;
+  const withdrawable = n(state?.withdrawable);
+  const totalNtl = n(state?.marginSummary.totalNtlPos);
+  const marginUsed = n(state?.marginSummary.totalMarginUsed);
+  const leverage = perpVal > 0 ? totalNtl / perpVal : 0;
 
-  const chart = useMemo(() => {
-    if (!portfolio) return null;
-    const w = WINDOWS.find((x) => x.k === win)!;
-    const name = perp ? w.perp : w.base;
-    const entry = portfolio.find((p) => p[0] === name);
-    return entry?.[1].pnlHistory || [];
-  }, [portfolio, win, perp]);
-  const chartPnl = chart && chart.length ? num(chart[chart.length - 1][1]) : 0;
+  const longVal = positions.filter((p) => n(p.szi) > 0).reduce((s, p) => s + n(p.positionValue), 0);
+  const shortVal = positions.filter((p) => n(p.szi) < 0).reduce((s, p) => s + Math.abs(n(p.positionValue)), 0);
+  const expTotal = longVal + shortVal || 1;
+  const longPct = (longVal / expTotal) * 100;
+  const shortPct = 100 - longPct;
+  const bias = longPct >= 65 ? "Long biased" : shortPct >= 65 ? "Short biased" : "Neutral";
+  const uPnl = positions.reduce((s, p) => s + n(p.unrealizedPnl), 0);
+  const roe = marginUsed > 0 ? (uPnl / marginUsed) * 100 : 0;
+
+  const [totalName, perpName] = WIN_NAME[win];
+  const chartName = scope === "perp" ? perpName : totalName;
+  const chartEntry = portfolio?.find((p) => p[0] === chartName);
+  const chartSeries = (metric === "value" ? chartEntry?.[1].accountValueHistory : chartEntry?.[1].pnlHistory) || [];
+  const chartLast = chartSeries.length ? n(chartSeries[chartSeries.length - 1][1]) : 0;
+  const perfTrades = useMemo(() => filterWindow(trades, win), [trades, win]);
+  const perf = useMemo(() => computeStats(perfTrades), [perfTrades]);
+  const cutoff = Date.now() - (win === "1W" ? 7 : win === "1M" ? 30 : 3650) * 86_400_000;
+  const tradeCount = fills.filter((f) => f.time >= cutoff).length;
+  const mdd = maxDrawdown(chartEntry?.[1].accountValueHistory);
 
   const copy = () => { navigator.clipboard?.writeText(address); setCopied(true); setTimeout(() => setCopied(false), 1200); };
+  const toggleMonitor = () => {
+    try {
+      const set = new Set(JSON.parse(localStorage.getItem("whale_watch") || "[]") as string[]);
+      if (set.has(address)) set.delete(address); else set.add(address);
+      localStorage.setItem("whale_watch", JSON.stringify(Array.from(set)));
+      setMonitored(set.has(address));
+    } catch {}
+  };
 
   return (
     <div className="container py-8">
       {/* header */}
       <div className="mb-6 flex flex-wrap items-center gap-3">
         <Link href="/whales" className="btn-ghost !px-3 !py-2 !text-sm"><ArrowLeft className="h-4 w-4" /> Back</Link>
-        <span className="grid h-9 w-9 place-items-center rounded-full bg-gradient-to-br from-brand-400 to-iris-500 text-xs font-bold text-ink-950">
-          {address.slice(2, 4).toUpperCase()}
-        </span>
+        <span className="grid h-9 w-9 place-items-center rounded-full bg-gradient-to-br from-brand-400 to-iris-500 text-xs font-bold text-ink-950">{address.slice(2, 4).toUpperCase()}</span>
         <span className="font-mono text-lg font-semibold text-white">{address.slice(0, 6)}…{address.slice(-4)}</span>
         <button onClick={copy} className="text-slate-400 hover:text-white">{copied ? <Check className="h-4 w-4 text-ok" /> : <Copy className="h-4 w-4" />}</button>
-        <a href={`https://app.hyperliquid.xyz/trade/${address}`} target="_blank" rel="noreferrer" className="ml-auto btn-ghost !px-4 !py-2 !text-sm">Copy Trading ↗</a>
+
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <button onClick={() => setShowStats(true)} className="btn-ghost !px-3.5 !py-2 !text-[13px]"><BarChart3 className="h-4 w-4" /> Trading Statistics</button>
+          <button onClick={toggleMonitor} className={`btn-ghost !px-3.5 !py-2 !text-[13px] ${monitored ? "!border-brand-400/50 !text-brand-300" : ""}`}>
+            {monitored ? <Check className="h-4 w-4" /> : <Bell className="h-4 w-4" />} {monitored ? "Monitoring" : "One-click Monitor"}
+          </button>
+          <a href="https://app.hyperliquid.xyz/trade" target="_blank" rel="noreferrer" className="btn-primary !px-3.5 !py-2 !text-[13px]"><Users className="h-4 w-4" /> Copy Trading</a>
+        </div>
       </div>
 
       {loading ? (
@@ -151,132 +213,262 @@ export default function WalletDashboard({ address }: { address: string }) {
         <>
           {/* account cards */}
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Card label="Account total value" value={compact(acctVal)} />
-            <Card label="Free margin (withdrawable)" value={compact(num(state?.withdrawable))} />
-            <Card label="Total position value" value={compact(totalNtl)} />
-            <Card label="Recent win rate" value={`${stats.winRate.toFixed(1)}%`} sub={`${stats.count} closed · net ${compact(stats.net)}`} tone={stats.net >= 0 ? "text-ok" : "text-danger"} />
-          </div>
+            <div className="glass flex items-center justify-between p-4">
+              <div>
+                <div className="text-[11px] text-slate-400">Account Total Value</div>
+                <div className="tabular mt-0.5 text-xl font-bold text-white">{money(acctTotal)}</div>
+                <div className="mt-2 space-y-0.5 text-[11px]">
+                  <div className="flex items-center gap-1.5 text-slate-400"><i className="h-2 w-2 rounded-full bg-brand-400" />Perpetual<span className="ml-auto tabular text-slate-300">{compact(perpVal)}</span></div>
+                  <div className="flex items-center gap-1.5 text-slate-400"><i className="h-2 w-2 rounded-full bg-iris-400" />Spot<span className="ml-auto tabular text-slate-300">{compact(spotValue)}</span></div>
+                </div>
+              </div>
+              <Donut value={acctTotal > 0 ? (perpVal / acctTotal) * 100 : 0} color="#38bdf8" />
+            </div>
 
-          {/* PnL chart + bias */}
-          <div className="mt-4 grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
-            {/* bias */}
-            <div className="glass p-5">
-              <div className="text-sm font-bold text-white">Direction bias</div>
-              <Bar label="Long exposure" v={longVal} total={longVal - shortVal || 1} tone="ok" />
-              <Bar label="Short exposure" v={Math.abs(shortVal)} total={longVal - shortVal || 1} tone="danger" />
-              <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-                <div><div className="text-[11px] text-slate-400">Long value</div><div className="tabular font-semibold text-ok">{compact(longVal)}</div></div>
-                <div className="text-right"><div className="text-[11px] text-slate-400">Short value</div><div className="tabular font-semibold text-danger">{compact(Math.abs(shortVal))}</div></div>
-                <div><div className="text-[11px] text-slate-400">Unrealized PnL</div><div className={`tabular font-semibold ${uPnl >= 0 ? "text-ok" : "text-danger"}`}>{compact(uPnl)}</div></div>
-                <div className="text-right"><div className="text-[11px] text-slate-400">Open positions</div><div className="tabular font-semibold text-white">{positions.length}</div></div>
+            <div className="glass flex items-center justify-between p-4">
+              <div>
+                <div className="text-[11px] text-slate-400">Free margin available</div>
+                <div className="tabular mt-0.5 text-xl font-bold text-white">{money(withdrawable)}</div>
+                <div className="mt-2 text-[11px] text-slate-400">Withdrawable<span className="ml-2 tabular text-slate-300">{pct(perpVal > 0 ? (withdrawable / perpVal) * 100 : 0)}</span></div>
+              </div>
+              <Donut value={perpVal > 0 ? (withdrawable / perpVal) * 100 : 0} color="#a78bfa" />
+            </div>
+
+            <div className="glass flex items-center justify-between p-4">
+              <div>
+                <div className="text-[11px] text-slate-400">Total Position Value</div>
+                <div className="tabular mt-0.5 text-xl font-bold text-white">{money(totalNtl)}</div>
+                <div className="mt-2 text-[11px] text-slate-400">Leverage Ratio<span className="ml-2 tabular text-slate-300">{leverage.toFixed(2)}x</span></div>
+              </div>
+              <Donut value={perpVal > 0 ? Math.min(100, (marginUsed / perpVal) * 100) : 0} color="#fbbf24" />
+            </div>
+
+            <div className="glass p-4">
+              <div className="text-[11px] text-slate-400">Trading Performance ({win})</div>
+              <div className="mt-2 grid grid-cols-2 gap-2 text-[12px]">
+                <div><div className="text-[10px] text-slate-500">Win Rate</div><div className={`tabular font-bold ${perf.winRate >= 50 ? "text-ok" : "text-white"}`}>{pct(perf.winRate)}</div></div>
+                <div><div className="text-[10px] text-slate-500">Max Drawdown</div><div className="tabular font-bold text-danger">{pct(mdd)}</div></div>
+                <div className="flex items-center gap-1.5 text-slate-400"><i className="h-1.5 w-1.5 rounded-full bg-brand-400" />Trades<span className="ml-auto tabular text-slate-200">{tradeCount}</span></div>
+                <div className="flex items-center gap-1.5 text-slate-400"><i className="h-1.5 w-1.5 rounded-full bg-ok" />Closed<span className="ml-auto tabular text-slate-200">{perf.count}</span></div>
               </div>
             </div>
-            {/* chart */}
+          </div>
+
+          {/* perp panel + chart */}
+          <div className="mt-4 grid gap-4 lg:grid-cols-[0.82fr_1.18fr]">
             <div className="glass p-5">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-slate-400">Perp Total Value</span>
+                <span className="rounded bg-white/[0.05] px-2 py-0.5 text-[10px] text-slate-400">Current Positions</span>
+              </div>
+              <div className="tabular text-xl font-bold text-white">{money(totalNtl)}</div>
+
+              <div className="mt-4">
+                <div className="mb-1 flex justify-between text-[11px]"><span className="text-slate-400">Average Margin Used Ratio</span><span className="tabular text-slate-300">{pct(perpVal > 0 ? Math.min(100, (marginUsed / perpVal) * 100) : 0, 0)}</span></div>
+                <Bar value={perpVal > 0 ? (marginUsed / perpVal) * 100 : 0} tone="brand" />
+              </div>
+
+              <div className="mt-4 flex items-center justify-between text-[11px]"><span className="font-semibold text-white">Direction Bias</span><span className="text-slate-400">{bias}</span></div>
+              <div className="mt-2">
+                <div className="mb-1 flex justify-between text-[11px]"><span className="text-slate-400">Long Exposure</span><span className="tabular text-ok">{pct(longPct, 0)}</span></div>
+                <Bar value={longPct} tone="ok" />
+              </div>
+              <div className="mt-2">
+                <div className="mb-1 flex justify-between text-[11px]"><span className="text-slate-400">Short Exposure</span><span className="tabular text-danger">{pct(shortPct, 0)}</span></div>
+                <Bar value={shortPct} tone="danger" />
+              </div>
+
+              <div className="mt-4 text-[11px] font-semibold text-white">Position Distribution</div>
+              <div className="mb-1 mt-1 flex justify-between text-[11px]"><span className="text-slate-400">Long <span className="tabular text-ok">{compact(longVal)}</span></span><span className="text-slate-400">Short <span className="tabular text-danger">{compact(shortVal)}</span></span></div>
+              <div className="flex h-2 overflow-hidden rounded-full bg-white/[0.06]">
+                <div className="h-full bg-ok" style={{ width: `${longPct}%` }} />
+                <div className="h-full bg-danger" style={{ width: `${shortPct}%` }} />
+              </div>
+
+              <div className="mt-4 grid grid-cols-2 gap-3 border-t border-white/[0.06] pt-3 text-[13px]">
+                <div><div className="text-[10px] text-slate-500">ROE</div><div className={`tabular font-semibold ${roe >= 0 ? "text-ok" : "text-danger"}`}>{roe >= 0 ? "+" : ""}{pct(roe)}</div></div>
+                <div className="text-right"><div className="text-[10px] text-slate-500">uPnL</div><div className={`tabular font-semibold ${uPnl >= 0 ? "text-ok" : "text-danger"}`}>{signed(uPnl)}</div></div>
+              </div>
+            </div>
+
+            <div className="glass p-5">
+              <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
                 <div>
-                  <div className="text-[11px] text-slate-400">{win} total PnL {perp ? "(perp)" : "(total)"}</div>
-                  <div className={`tabular text-xl font-bold ${chartPnl >= 0 ? "text-ok" : "text-danger"}`}>{chartPnl >= 0 ? "+" : ""}{money(chartPnl)}</div>
+                  <div className="text-[11px] text-slate-400">{win} {metric === "value" ? "Account Value" : "Total PnL"} ({scope === "perp" ? "Perp Only" : "Total"})</div>
+                  <div className={`tabular text-xl font-bold ${chartLast >= 0 ? "text-ok" : "text-danger"}`}>{metric === "value" ? money(chartLast) : signed(chartLast)}</div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <div className="flex rounded-lg border border-white/10 p-0.5 text-[11px]">
-                    {(["perp", "total"] as const).map((m) => (
-                      <button key={m} onClick={() => setPerp(m === "perp")} className={`rounded px-2 py-1 font-medium ${(m === "perp") === perp ? "bg-white/10 text-white" : "text-slate-500"}`}>{m === "perp" ? "Perp" : "Total"}</button>
-                    ))}
-                  </div>
-                  <div className="flex rounded-lg border border-white/10 p-0.5 text-[11px]">
-                    {WINDOWS.map((w) => (
-                      <button key={w.k} onClick={() => setWin(w.k)} className={`rounded px-2 py-1 font-medium ${win === w.k ? "bg-brand-500/20 text-brand-300" : "text-slate-500"}`}>{w.k}</button>
-                    ))}
-                  </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Dropdown value={win} options={TIME_OPTS} onChange={setWin} icon={<Clock className="h-3.5 w-3.5 text-slate-400" />} />
+                  <Dropdown value={scope} options={SCOPE_OPTS} onChange={setScope} />
+                  <Dropdown value={metric} options={METRIC_OPTS} onChange={setMetric} />
                 </div>
               </div>
-              <PnlChart points={chart || []} />
+              <PnlChart points={chartSeries} />
             </div>
           </div>
 
-          {/* positions */}
-          <div className="mt-4 glass p-5">
-            <div className="mb-3 text-sm font-bold text-white">Perp positions ({positions.length})</div>
-            {positions.length === 0 ? (
-              <div className="py-6 text-center text-sm text-slate-500">No open perp positions.</div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-[13px]">
-                  <thead className="text-[11px] uppercase tracking-wide text-slate-500">
-                    <tr>{["Asset", "Side", "Size", "Entry", "Value", "uPnL", "ROE", "Liq.", "Lev"].map((h) => <th key={h} className="whitespace-nowrap py-2 pr-3 font-semibold">{h}</th>)}</tr>
-                  </thead>
-                  <tbody className="tabular">
-                    {positions.map((p) => {
-                      const long = num(p.szi) > 0, pnl = num(p.unrealizedPnl), roe = num(p.returnOnEquity) * 100;
-                      return (
-                        <tr key={p.coin} className="border-t border-white/[0.05]">
-                          <td className="py-2 pr-3 font-semibold text-white">{p.coin}</td>
-                          <td className="py-2 pr-3"><span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-bold ${long ? "bg-ok/15 text-ok" : "bg-danger/15 text-danger"}`}>{long ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}{long ? "Long" : "Short"}</span></td>
-                          <td className="py-2 pr-3 text-slate-300">{Math.abs(num(p.szi)).toLocaleString("en-US", { maximumFractionDigits: 4 })}</td>
-                          <td className="py-2 pr-3 text-slate-300">{money(num(p.entryPx))}</td>
-                          <td className="py-2 pr-3 text-slate-200">{compact(num(p.positionValue))}</td>
-                          <td className={`py-2 pr-3 font-semibold ${pnl >= 0 ? "text-ok" : "text-danger"}`}>{compact(pnl)}</td>
-                          <td className={`py-2 pr-3 ${roe >= 0 ? "text-ok" : "text-danger"}`}>{roe >= 0 ? "+" : ""}{roe.toFixed(1)}%</td>
-                          <td className="py-2 pr-3 text-slate-400">{p.liquidationPx ? money(num(p.liquidationPx)) : "—"}</td>
-                          <td className="py-2 pr-3 text-slate-400">{p.leverage?.value ?? "—"}×</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
+          {/* tabs */}
+          <div className="mt-4 glass overflow-hidden">
+            <div className="flex gap-1 overflow-x-auto border-b border-white/[0.06] px-2">
+              {TABS.map((t) => {
+                const count = t === "Spot Holdings" ? spot.length : t === "Perp Positions" ? positions.length : t === "Open Orders" ? orders.length : t === "Completed Trades" ? trades.length : t === "Funding History" ? funding.length : undefined;
+                return (
+                  <button key={t} onClick={() => setTab(t)} className={`whitespace-nowrap border-b-2 px-3 py-3 text-[13px] font-semibold transition-colors ${tab === t ? "border-brand-400 text-white" : "border-transparent text-slate-500 hover:text-slate-300"}`}>
+                    {t}{count != null ? ` (${count})` : ""}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="overflow-x-auto p-1">{renderTab(tab, { positions, spot, mid, orders, fills, trades, funding })}</div>
           </div>
 
-          {/* top trades */}
-          {stats.top.length > 0 && (
-            <div className="mt-4 glass p-5">
-              <div className="mb-3 text-sm font-bold text-white">Top recent closed trades</div>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {stats.top.map((f, i) => {
-                  const pnl = num(f.closedPnl);
-                  return (
-                    <div key={i} className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-3.5">
-                      <div className="flex items-center justify-between">
-                        <span className="font-semibold text-white">{f.coin}</span>
-                        <span className="text-[11px] text-slate-500">{f.dir}</span>
-                      </div>
-                      <div className={`tabular mt-1.5 text-lg font-bold ${pnl >= 0 ? "text-ok" : "text-danger"}`}>{compact(pnl)}</div>
-                    </div>
-                  );
-                })}
-              </div>
-              <p className="mt-3 text-[11px] text-slate-500">Computed from Hyperliquid recent fills (closed-PnL). Not a full lifetime history.</p>
-            </div>
-          )}
+          <p className="mt-4 text-center text-[11px] text-slate-500">
+            Live from Hyperliquid&apos;s public API · read-only, no sign-up. Trade stats are computed from recent fills — long windows may be partial.
+          </p>
         </>
       )}
+
+      {showStats && <TradingStatsModal address={address} trades={trades} onClose={() => setShowStats(false)} />}
     </div>
   );
 }
 
-function Card({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: string }) {
-  return (
-    <div className="glass p-4">
-      <div className="text-[11px] text-slate-400">{label}</div>
-      <div className={`tabular mt-0.5 text-xl font-bold ${tone || "text-white"}`}>{value}</div>
-      {sub && <div className="mt-0.5 text-[11px] text-slate-500">{sub}</div>}
-    </div>
+/* ── tab bodies ──────────────────────────────────────────────────────────── */
+function renderTab(
+  tab: Tab,
+  d: { positions: Pos[]; spot: SpotBal[]; mid: (c: string) => number; orders: OpenOrder[]; fills: Fill[]; trades: Trade[]; funding: Funding[] },
+) {
+  const H = ({ cols }: { cols: string[] }) => (
+    <thead className="text-[11px] uppercase tracking-wide text-slate-500">
+      <tr>{cols.map((c, i) => <th key={c} className={`whitespace-nowrap px-3 py-2.5 font-semibold ${i === 0 ? "text-left" : "text-right"}`}>{c}</th>)}</tr>
+    </thead>
   );
-}
+  const empty = (msg: string) => <div className="py-10 text-center text-sm text-slate-500">{msg}</div>;
 
-function Bar({ label, v, total, tone }: { label: string; v: number; total: number; tone: "ok" | "danger" }) {
-  const pct = Math.max(0, Math.min(100, (v / (Math.abs(total) || 1)) * 100));
-  return (
-    <div className="mt-3">
-      <div className="mb-1 flex items-center justify-between text-[11px]">
-        <span className="text-slate-400">{label}</span>
-        <span className={`tabular ${tone === "ok" ? "text-ok" : "text-danger"}`}>{pct.toFixed(0)}%</span>
-      </div>
-      <div className="h-2 overflow-hidden rounded-full bg-white/[0.06]">
-        <div className={`h-full rounded-full ${tone === "ok" ? "bg-ok" : "bg-danger"}`} style={{ width: `${pct}%` }} />
-      </div>
-    </div>
+  if (tab === "Spot Holdings")
+    return d.spot.length === 0 ? empty("No spot holdings.") : (
+      <table className="w-full text-[13px]">
+        <H cols={["Asset", "Balance", "Value"]} />
+        <tbody className="tabular">
+          {d.spot.map((b) => (
+            <tr key={b.coin} className="border-t border-white/[0.05]">
+              <td className="px-3 py-2.5 text-left font-semibold text-white">{b.coin}</td>
+              <td className="px-3 py-2.5 text-right text-slate-300">{sizeFmt(n(b.total))}</td>
+              <td className="px-3 py-2.5 text-right text-slate-200">{money(n(b.total) * (b.coin === "USDC" ? 1 : d.mid(b.coin)))}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    );
+
+  if (tab === "Perp Positions")
+    return d.positions.length === 0 ? empty("No open perp positions.") : (
+      <table className="w-full text-[13px]">
+        <H cols={["Symbol", "Position Value", "uPnL", "Entry Avg.", "Mark", "Liq.", "Margin", "Funding", "TP/SL"]} />
+        <tbody className="tabular">
+          {d.positions.map((p) => {
+            const long = n(p.szi) > 0, pnl = n(p.unrealizedPnl), r = n(p.returnOnEquity) * 100;
+            return (
+              <tr key={p.coin} className="border-t border-white/[0.05]">
+                <td className="px-3 py-2.5 text-left">
+                  <span className={`mr-1.5 rounded px-1.5 py-0.5 text-[10px] font-bold ${long ? "bg-ok/15 text-ok" : "bg-danger/15 text-danger"}`}>{long ? "Long" : "Short"}</span>
+                  <span className="font-semibold text-white">{p.coin}</span>
+                  <span className="ml-1 text-[10px] text-slate-500">{p.leverage?.type === "isolated" ? "Isolated" : "Cross"} {p.leverage?.value}x</span>
+                </td>
+                <td className="px-3 py-2.5 text-right text-slate-200">{money(n(p.positionValue))}<div className="text-[10px] text-slate-500">{sizeFmt(n(p.szi))} {p.coin}</div></td>
+                <td className={`px-3 py-2.5 text-right font-semibold ${pnl >= 0 ? "text-ok" : "text-danger"}`}>{signed(pnl)}<div className="text-[10px] opacity-80">{r >= 0 ? "+" : ""}{r.toFixed(2)}%</div></td>
+                <td className="px-3 py-2.5 text-right text-slate-300">{money(n(p.entryPx))}</td>
+                <td className="px-3 py-2.5 text-right text-slate-300">{d.mid(p.coin) ? money(d.mid(p.coin)) : "—"}</td>
+                <td className="px-3 py-2.5 text-right text-slate-400">{p.liquidationPx ? money(n(p.liquidationPx)) : "—"}</td>
+                <td className="px-3 py-2.5 text-right text-slate-300">{money(n(p.marginUsed))}</td>
+                <td className="px-3 py-2.5 text-right text-slate-400">{p.cumFunding ? money(-n(p.cumFunding.sinceOpen)) : "—"}</td>
+                <td className="px-3 py-2.5 text-right text-slate-500">-/-</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    );
+
+  if (tab === "Open Orders")
+    return d.orders.length === 0 ? empty("No open orders.") : (
+      <table className="w-full text-[13px]">
+        <H cols={["Asset", "Side", "Price", "Size", "Placed"]} />
+        <tbody className="tabular">
+          {d.orders.map((o, i) => (
+            <tr key={i} className="border-t border-white/[0.05]">
+              <td className="px-3 py-2.5 text-left font-semibold text-white">{o.coin}</td>
+              <td className={`px-3 py-2.5 text-right font-semibold ${o.side === "B" ? "text-ok" : "text-danger"}`}>{o.side === "B" ? "Buy" : "Sell"}</td>
+              <td className="px-3 py-2.5 text-right text-slate-300">{money(n(o.limitPx))}</td>
+              <td className="px-3 py-2.5 text-right text-slate-300">{sizeFmt(n(o.sz))}</td>
+              <td className="px-3 py-2.5 text-right text-slate-500">{ago(o.timestamp)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    );
+
+  if (tab === "Recent Fills")
+    return d.fills.length === 0 ? empty("No recent fills.") : (
+      <table className="w-full text-[13px]">
+        <H cols={["Time", "Asset", "Direction", "Price", "Size", "Closed PnL", "Fee"]} />
+        <tbody className="tabular">
+          {d.fills.slice(0, 60).map((f, i) => {
+            const cp = n(f.closedPnl);
+            return (
+              <tr key={i} className="border-t border-white/[0.05]">
+                <td className="px-3 py-2.5 text-left text-slate-400">{ago(f.time)}</td>
+                <td className="px-3 py-2.5 text-right font-semibold text-white">{f.coin}</td>
+                <td className="px-3 py-2.5 text-right text-slate-300">{f.dir}</td>
+                <td className="px-3 py-2.5 text-right text-slate-300">{money(n(f.px))}</td>
+                <td className="px-3 py-2.5 text-right text-slate-300">{sizeFmt(n(f.sz))}</td>
+                <td className={`px-3 py-2.5 text-right ${cp > 0 ? "text-ok" : cp < 0 ? "text-danger" : "text-slate-500"}`}>{cp !== 0 ? signed(cp) : "—"}</td>
+                <td className="px-3 py-2.5 text-right text-slate-500">{money(n(f.fee))}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    );
+
+  if (tab === "Completed Trades")
+    return d.trades.length === 0 ? empty("No completed trades in recent fills.") : (
+      <table className="w-full text-[13px]">
+        <H cols={["Closed", "Asset", "Side", "Size", "Gross PnL", "Fees", "Net PnL", "Duration"]} />
+        <tbody className="tabular">
+          {d.trades.slice(0, 60).map((t, i) => (
+            <tr key={i} className="border-t border-white/[0.05]">
+              <td className="px-3 py-2.5 text-left text-slate-400">{ago(t.closeTime)}</td>
+              <td className="px-3 py-2.5 text-right font-semibold text-white">{t.coin}</td>
+              <td className="px-3 py-2.5 text-right"><span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${t.side === "Long" ? "bg-ok/15 text-ok" : "bg-danger/15 text-danger"}`}>{t.side}</span></td>
+              <td className="px-3 py-2.5 text-right text-slate-300">{sizeFmt(t.size)}</td>
+              <td className={`px-3 py-2.5 text-right ${t.realized >= 0 ? "text-ok" : "text-danger"}`}>{signed(t.realized)}</td>
+              <td className="px-3 py-2.5 text-right text-slate-400">{money(t.fees)}</td>
+              <td className={`px-3 py-2.5 text-right font-semibold ${t.net >= 0 ? "text-ok" : "text-danger"}`}>{signed(t.net)}</td>
+              <td className="px-3 py-2.5 text-right text-slate-400">{fmtDuration(t.durationMs)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    );
+
+  // Funding History
+  return d.funding.length === 0 ? empty("No funding payments in the last 30 days.") : (
+    <table className="w-full text-[13px]">
+      <H cols={["Time", "Asset", "Payment", "Rate"]} />
+      <tbody className="tabular">
+        {d.funding.slice(0, 60).map((f, i) => {
+          const usd = n(f.delta?.usdc);
+          return (
+            <tr key={i} className="border-t border-white/[0.05]">
+              <td className="px-3 py-2.5 text-left text-slate-400">{ago(f.time)}</td>
+              <td className="px-3 py-2.5 text-right font-semibold text-white">{f.delta?.coin}</td>
+              <td className={`px-3 py-2.5 text-right ${usd >= 0 ? "text-ok" : "text-danger"}`}>{signed(usd, 4)}</td>
+              <td className="px-3 py-2.5 text-right text-slate-400">{(n(f.delta?.fundingRate) * 100).toFixed(4)}%</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
   );
 }

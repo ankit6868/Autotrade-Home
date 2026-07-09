@@ -31,7 +31,7 @@ export default function Header() {
       }`}
     >
       <div className="container flex h-16 items-center justify-between gap-4">
-        <a href="#top" className="flex items-center gap-2.5">
+        <a href="/" className="flex items-center gap-2.5">
           <Logo />
           <span className="text-[15px] font-bold tracking-tight text-white">
             {site.brandShort}
