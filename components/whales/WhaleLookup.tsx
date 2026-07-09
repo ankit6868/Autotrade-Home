@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Search, Loader2, TrendingUp, TrendingDown, AlertCircle } from "lucide-react";
 
@@ -39,6 +39,19 @@ export default function WhaleLookup() {
   const [err, setErr] = useState("");
   const [data, setData] = useState<State | null>(null);
   const [scanned, setScanned] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // ⌘K / Ctrl+K focuses the lookup from anywhere on the page.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        inputRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   async function reveal(e?: React.FormEvent) {
     e?.preventDefault();
@@ -80,9 +93,10 @@ export default function WhaleLookup() {
         <div className="relative flex-1">
           <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
           <input
+            ref={inputRef}
             value={addr}
             onChange={(e) => setAddr(e.target.value)}
-            placeholder="Enter wallet for positions & PnL — 0x…"
+            placeholder="Enter wallet for positions & PnL (Ctrl+K)"
             spellCheck={false}
             className="w-full rounded-xl border border-white/10 bg-ink-900/70 py-3.5 pl-11 pr-4 font-mono text-sm text-slate-100 outline-none transition-colors focus:border-brand-400/50"
           />

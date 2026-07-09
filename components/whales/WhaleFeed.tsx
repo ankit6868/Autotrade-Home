@@ -2,38 +2,38 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Copy, ArrowUpRight, ArrowDownRight } from "lucide-react";
+import { Copy, ArrowUpRight, ArrowDownRight, RefreshCw } from "lucide-react";
 
 type Whale = {
-  key: string;        // addr-coin (dedupe key)
+  key: string; // addr-coin (stable dedupe key → no remount on update)
   addr: string;
   coin: string;
-  long: boolean;      // aggressor direction
-  tradeNtl: number;   // this trade's notional
+  long: boolean; // trade aggressor side (fallback direction until enriched)
+  tradeNtl: number; // this trade's notional
+  tradeSz: number; // this trade's size (unsigned)
   time: number;
-  posValue?: number;  // signed position value (from clearinghouseState)
-  posSize?: number;   // signed position size
+  posValue?: number; // |current position value| from clearinghouseState
+  posSize?: number; // signed position size (szi) — sign = real direction
 };
 
-const COINS = ["BTC", "ETH", "SOL", "HYPE"];
-const MIN_NOTIONAL = 100_000;
+// Majors + the most active perps, so the table fills quickly.
+const COINS = ["BTC", "ETH", "SOL", "HYPE", "XRP", "DOGE", "SUI", "AVAX", "LTC", "BNB", "PEPE", "WLD"];
+const MIN_NOTIONAL = 100_000; // whale-sized taker trade
+const MAX_ROWS = 60;
+const REFRESH_SEC = 60; // re-enrich every 60s
 
 const short = (a: string) => `${a.slice(0, 4)}…${a.slice(-2)}`;
-const compact = (n: number) => {
-  const a = Math.abs(n);
-  const s = n < 0 ? "-$" : "$";
-  if (a >= 1e9) return `${s}${(a / 1e9).toFixed(2)}B`;
-  if (a >= 1e6) return `${s}${(a / 1e6).toFixed(2)}M`;
-  if (a >= 1e3) return `${s}${(a / 1e3).toFixed(0)}K`;
-  return `${s}${a.toFixed(0)}`;
-};
+const moneyFull = (n: number) =>
+  "$ " + Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const sizeFmt = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 5 });
 const ago = (t: number) => {
   const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
   if (s < 15) return "Just now";
   if (s < 60) return `${s}s ago`;
   const m = Math.floor(s / 60);
   if (m < 60) return `${m} minute${m > 1 ? "s" : ""} ago`;
-  return `${Math.floor(m / 60)}h ago`;
+  const h = Math.floor(m / 60);
+  return `${h} hour${h > 1 ? "s" : ""} ago`;
 };
 
 // Per-address position cache so we can show real "Position Value" without
@@ -41,9 +41,10 @@ const ago = (t: number) => {
 const posCache = new Map<string, { at: number; byCoin: Record<string, { value: number; size: number }> }>();
 const inflight = new Set<string>();
 
-async function fetchPositions(addr: string) {
+async function fetchPositions(addr: string, force = false) {
   const c = posCache.get(addr);
-  if ((c && Date.now() - c.at < 60_000) || inflight.has(addr)) return c;
+  if (inflight.has(addr)) return c;
+  if (!force && c && Date.now() - c.at < 60_000) return c;
   inflight.add(addr);
   try {
     const r = await fetch("/api/hl", {
@@ -70,23 +71,33 @@ async function fetchPositions(addr: string) {
 export default function WhaleFeed({ compactMode = false }: { compactMode?: boolean }) {
   const [rows, setRows] = useState<Whale[]>([]);
   const [status, setStatus] = useState<"connecting" | "live" | "down">("connecting");
-  const [, force] = useState(0);
+  const [countdown, setCountdown] = useState(REFRESH_SEC);
+  const rowsRef = useRef<Whale[]>([]);
   const router = useRouter();
+
+  // Keep a ref of current rows so the 60s refresh can read them without
+  // re-subscribing the WebSocket.
+  useEffect(() => {
+    rowsRef.current = rows;
+  }, [rows]);
 
   useEffect(() => {
     let closed = false;
     let retry: ReturnType<typeof setTimeout>;
 
-    function enrich(addr: string, coin: string) {
-      fetchPositions(addr).then((e) => {
-        const hit = e?.byCoin?.[coin];
-        if (!hit) return;
-        setRows((prev) =>
-          prev.map((r) =>
-            r.addr === addr && r.coin === coin ? { ...r, posValue: hit.value, posSize: hit.size } : r,
-          ),
-        );
-      });
+    // Apply enriched positions in place — never removes rows.
+    function applyEnrich(addr: string, e?: { byCoin: Record<string, { value: number; size: number }> } | null) {
+      if (!e) return;
+      setRows((prev) =>
+        prev.map((r) => {
+          if (r.addr !== addr) return r;
+          const hit = e.byCoin?.[r.coin];
+          return hit ? { ...r, posValue: Math.abs(hit.value), posSize: hit.size } : r;
+        }),
+      );
+    }
+    function enrich(addr: string, force = false) {
+      fetchPositions(addr, force).then((e) => applyEnrich(addr, e));
     }
 
     function connect() {
@@ -115,24 +126,26 @@ export default function WhaleFeed({ compactMode = false }: { compactMode?: boole
             const addr = long ? t.users[0] : t.users[1]; // taker side
             if (!addr || !/^0x[a-f0-9]{40}$/i.test(addr)) continue;
             updates.push({
-              key: `${addr}-${t.coin}`,
+              key: `${addr.toLowerCase()}-${t.coin}`,
               addr: addr.toLowerCase(),
               coin: t.coin,
               long,
               tradeNtl: ntl,
+              tradeSz: Number(t.sz),
               time: Number(t.time) || Date.now(),
             });
           }
           if (!updates.length) return;
+          // Merge into existing rows — keep prior enrichment, never wipe.
           setRows((prev) => {
             const map = new Map(prev.map((r) => [r.key, r]));
             for (const u of updates) {
-              const existing = map.get(u.key);
-              map.set(u.key, { ...u, posValue: existing?.posValue, posSize: existing?.posSize });
+              const ex = map.get(u.key);
+              map.set(u.key, ex ? { ...u, posValue: ex.posValue, posSize: ex.posSize } : u);
             }
-            return Array.from(map.values()).sort((a, b) => b.time - a.time).slice(0, 40);
+            return Array.from(map.values()).sort((a, b) => b.time - a.time).slice(0, MAX_ROWS);
           });
-          updates.forEach((u) => enrich(u.addr, u.coin));
+          updates.forEach((u) => enrich(u.addr));
         } catch {
           /* ignore */
         }
@@ -146,7 +159,20 @@ export default function WhaleFeed({ compactMode = false }: { compactMode?: boole
     }
 
     connect();
-    const tick = setInterval(() => force((n) => n + 1), 5000);
+
+    // 1s tick: drives the "Updated in Xs" countdown, refreshes relative
+    // times, and every 60s re-enriches every shown wallet's positions.
+    const tick = setInterval(() => {
+      setCountdown((c) => {
+        if (c <= 1) {
+          const addrs = Array.from(new Set(rowsRef.current.map((r) => r.addr)));
+          addrs.forEach((a) => enrich(a, true));
+          return REFRESH_SEC;
+        }
+        return c - 1;
+      });
+    }, 1000);
+
     return () => {
       closed = true;
       clearInterval(tick);
@@ -164,11 +190,13 @@ export default function WhaleFeed({ compactMode = false }: { compactMode?: boole
           </span>
           Live Whale Activity
         </h3>
-        <span className="text-[11px] text-slate-500">≥ {compact(MIN_NOTIONAL)} · {COINS.join(" · ")}</span>
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11px] text-slate-400">
+          <RefreshCw className="h-3 w-3" /> Updated in {countdown}s
+        </span>
       </div>
 
       {/* header row */}
-      <div className="grid grid-cols-[1.1fr_1.2fr_1.3fr_0.9fr] gap-2 border-y border-white/[0.06] bg-white/[0.02] px-5 py-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+      <div className="grid grid-cols-[1fr_1.2fr_1.3fr_0.9fr] gap-2 border-y border-white/[0.06] bg-white/[0.02] px-5 py-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
         <span>Address</span>
         <span>Direction</span>
         <span className="text-right">Position Value</span>
@@ -180,51 +208,50 @@ export default function WhaleFeed({ compactMode = false }: { compactMode?: boole
           {status === "down" ? "Reconnecting to Hyperliquid…" : "Watching for whale-sized trades…"}
         </div>
       ) : (
-        <div className={`divide-y divide-white/[0.04] overflow-y-auto ${compactMode ? "max-h-[360px]" : "max-h-[520px]"}`}>
-          {rows.map((r) => (
-            <button
-              key={r.key + r.time}
-              onClick={() => router.push(`/whales/${r.addr}`)}
-              className="grid w-full grid-cols-[1.1fr_1.2fr_1.3fr_0.9fr] items-center gap-2 px-5 py-3 text-left transition-colors hover:bg-white/[0.03]"
-            >
-              {/* address */}
-              <span className="flex items-center gap-1.5 font-mono text-[13px] text-slate-200">
-                {short(r.addr)}
-                <span
-                  role="button"
-                  tabIndex={-1}
-                  onClick={(e) => { e.stopPropagation(); navigator.clipboard?.writeText(r.addr); }}
-                  className="text-slate-500 hover:text-white"
-                >
-                  <Copy className="h-3 w-3" />
+        <div className={`divide-y divide-white/[0.04] overflow-y-auto ${compactMode ? "max-h-[380px]" : "max-h-[540px]"}`}>
+          {rows.map((r) => {
+            const long = r.posSize != null ? r.posSize > 0 : r.long;
+            const value = r.posValue != null ? r.posValue : r.tradeNtl;
+            const size = r.posSize != null ? r.posSize : (r.long ? r.tradeSz : -r.tradeSz);
+            return (
+              <button
+                key={r.key}
+                onClick={() => router.push(`/whales/${r.addr}`)}
+                className="grid w-full grid-cols-[1fr_1.2fr_1.3fr_0.9fr] items-center gap-2 px-5 py-3 text-left transition-colors hover:bg-white/[0.03]"
+              >
+                {/* address */}
+                <span className="flex items-center gap-1.5 font-mono text-[13px] text-slate-200">
+                  {short(r.addr)}
+                  <span
+                    role="button"
+                    tabIndex={-1}
+                    onClick={(e) => { e.stopPropagation(); navigator.clipboard?.writeText(r.addr); }}
+                    className="text-slate-500 hover:text-white"
+                  >
+                    <Copy className="h-3 w-3" />
+                  </span>
                 </span>
-              </span>
-              {/* direction */}
-              <span className="flex items-center gap-2">
-                <span className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[11px] font-bold ${r.long ? "bg-ok/15 text-ok" : "bg-danger/15 text-danger"}`}>
-                  {r.long ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
-                  {r.long ? "Long" : "Short"}
+                {/* direction */}
+                <span className="flex items-center gap-2">
+                  <span className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[11px] font-bold ${long ? "bg-ok/15 text-ok" : "bg-danger/15 text-danger"}`}>
+                    {long ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
+                    {long ? "Long" : "Short"}
+                  </span>
+                  <span className="leading-tight">
+                    <span className="block text-[13px] font-semibold text-white">{r.coin}</span>
+                    <span className="block text-[10px] text-slate-500">Cross</span>
+                  </span>
                 </span>
-                <span className="text-[13px]">
-                  <span className="font-semibold text-white">{r.coin}</span>
-                  <span className="ml-1 text-[10px] text-slate-500">Cross</span>
+                {/* position value */}
+                <span className="text-right">
+                  <div className="tabular text-[13px] font-semibold text-slate-100">{moneyFull(value)}</div>
+                  <div className="tabular text-[10px] text-slate-500">{sizeFmt(size)} {r.coin}</div>
                 </span>
-              </span>
-              {/* position value */}
-              <span className="text-right">
-                <div className="tabular text-[13px] font-semibold text-slate-100">
-                  {compact(r.posValue != null ? Math.abs(r.posValue) : r.tradeNtl)}
-                </div>
-                <div className="tabular text-[10px] text-slate-500">
-                  {r.posSize != null
-                    ? `${r.posSize.toLocaleString("en-US", { maximumFractionDigits: 4 })} ${r.coin}`
-                    : "trade"}
-                </div>
-              </span>
-              {/* time */}
-              <span className="text-right text-[11px] text-slate-500">{ago(r.time)}</span>
-            </button>
-          ))}
+                {/* time */}
+                <span className="text-right text-[11px] text-slate-500">{ago(r.time)}</span>
+              </button>
+            );
+          })}
         </div>
       )}
     </div>

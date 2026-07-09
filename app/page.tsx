@@ -22,6 +22,8 @@ export default function Home() {
         {/* A — Hero & immediate proof */}
         <Hero />
         <ProofStrip />
+        {/* Live whale tracker (real Hyperliquid data) */}
+        <WhaleSection />
         {/* B — Problem & the companion */}
         <Problem />
         <Companion />
@@ -30,8 +32,6 @@ export default function Home() {
         <Workstation />
         {/* D — Automation, discipline & control */}
         <Automation />
-        {/* Live whale activity (real Hyperliquid data) */}
-        <WhaleSection />
         {/* E — Trust, subscription & conversion */}
         <Security />
         <Pricing />
