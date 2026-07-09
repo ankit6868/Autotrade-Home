@@ -6,6 +6,7 @@ import Companion from "@/components/Companion";
 import HowItWorks from "@/components/HowItWorks";
 import Workstation from "@/components/Workstation";
 import Automation from "@/components/Automation";
+import WhaleSection from "@/components/WhaleSection";
 import Security from "@/components/Security";
 import Pricing from "@/components/Pricing";
 import Intelligence from "@/components/Intelligence";
@@ -29,6 +30,8 @@ export default function Home() {
         <Workstation />
         {/* D — Automation, discipline & control */}
         <Automation />
+        {/* Live whale activity (real Hyperliquid data) */}
+        <WhaleSection />
         {/* E — Trust, subscription & conversion */}
         <Security />
         <Pricing />

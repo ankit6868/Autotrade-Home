@@ -8,9 +8,24 @@ const HL_INFO = "https://api.hyperliquid.xyz/info";
 // Only allow the read-only request types the tracker actually uses, so this
 // proxy can never be turned into an open relay.
 const ALLOWED = new Set([
-  "clearinghouseState", // a wallet's positions + PnL
+  "clearinghouseState", // a wallet's perp positions + PnL
+  "spotClearinghouseState", // a wallet's spot balances
+  "portfolio", // account-value + PnL history (chart)
+  "userFills", // recent fills → trading stats
+  "frontendOpenOrders", // open orders
+  "userFunding", // funding history
   "metaAndAssetCtxs", // per-coin market data (funding, OI, volume, price)
   "allMids", // mid prices
+]);
+
+// Request types that require a `user` address (validated below).
+const USER_TYPES = new Set([
+  "clearinghouseState",
+  "spotClearinghouseState",
+  "portfolio",
+  "userFills",
+  "frontendOpenOrders",
+  "userFunding",
 ]);
 
 export const runtime = "edge";
@@ -26,7 +41,7 @@ export async function POST(req: Request) {
   if (!body?.type || !ALLOWED.has(body.type)) {
     return NextResponse.json({ error: "unsupported request type" }, { status: 400 });
   }
-  if (body.type === "clearinghouseState") {
+  if (USER_TYPES.has(body.type)) {
     const u = (body.user || "").trim().toLowerCase();
     if (!/^0x[a-f0-9]{40}$/.test(u)) {
       return NextResponse.json({ error: "invalid_address" }, { status: 400 });
