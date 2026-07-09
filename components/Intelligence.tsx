@@ -6,9 +6,10 @@ const cards = [
   {
     icon: Waves,
     tag: "Whale Tracker",
+    href: "/whales",
     title: "Follow the wallets that move markets",
-    body: "Search addresses, monitor large positions and get alerts when tracked wallets open, close or transfer size.",
-    cta: "Browse live activity",
+    body: "Look up any Hyperliquid wallet's live positions & PnL, and watch whale-sized trades stream in real time.",
+    cta: "Open the whale tracker",
     rows: [
       "0x7A…19F opened BTC long · $4.2M · 8.5×",
       "0x3C…8B2 closed ETH short · $1.1M",
@@ -18,6 +19,7 @@ const cards = [
   {
     icon: Newspaper,
     tag: "News & Events",
+    href: site.appUrl,
     title: "Know what moved the market — and what's next",
     body: "Verified crypto news, macro releases and ETF flows, organized by impact and timing, not noise.",
     cta: "View priority feed",
@@ -49,7 +51,7 @@ export default function Intelligence() {
           {cards.map((c, i) => (
             <Reveal key={c.tag} delay={i * 0.08}>
               <a
-                href={site.appUrl}
+                href={c.href}
                 className="glass glass-hover group flex h-full flex-col p-6"
               >
                 <div className="flex items-center justify-between">

@@ -5,10 +5,10 @@ import { Menu, X, ArrowRight } from "lucide-react";
 import { site } from "@/lib/site";
 
 const nav = [
-  { label: "Product", href: "#product" },
-  { label: "Whale Tracker", href: "#intelligence" },
-  { label: "News", href: "#intelligence" },
-  { label: "Pricing", href: "#pricing" },
+  { label: "Product", href: "/#product" },
+  { label: "Whale Tracker", href: "/whales" },
+  { label: "News", href: "/#intelligence" },
+  { label: "Pricing", href: "/#pricing" },
 ];
 
 export default function Header() {
