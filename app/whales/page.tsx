@@ -4,6 +4,8 @@ import Footer from "@/components/Footer";
 import WhaleLookup from "@/components/whales/WhaleLookup";
 import WhaleFeed from "@/components/whales/WhaleFeed";
 import WhaleMarkets from "@/components/whales/WhaleMarkets";
+import WhaleAggregate from "@/components/whales/WhaleAggregate";
+import WhaleLiquidationMap from "@/components/whales/WhaleLiquidationMap";
 
 export const metadata: Metadata = {
   title: "Whale Tracker — real-time Hyperliquid positions & flow",
@@ -46,9 +48,15 @@ export default function WhalesPage() {
           </div>
         </section>
 
-        {/* Live feed + markets */}
-        <section className="container grid gap-4 pb-20 lg:grid-cols-2">
+        {/* Tracked-whale aggregate + live feed */}
+        <section className="container grid gap-4 lg:grid-cols-2">
+          <WhaleAggregate />
           <WhaleFeed />
+        </section>
+
+        {/* Whale liquidation map + live markets */}
+        <section className="container grid gap-4 pb-20 pt-4 lg:grid-cols-[1.3fr_0.7fr]">
+          <WhaleLiquidationMap />
           <WhaleMarkets />
         </section>
 
