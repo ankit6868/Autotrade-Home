@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, Flame } from "lucide-react";
 import { trackedAddresses, fetchWhaleStates, type WhaleState } from "@/lib/hlPos";
 import { compact, n } from "@/lib/whale";
@@ -29,7 +29,7 @@ const VIEW_OPTS: { label: string; value: View }[] = [
   { label: "Levels", value: "levels" },
 ];
 
-// viridis-style colormap (magnitude → colour), matching the heatmap look.
+// viridis-style colormap (magnitude -> colour), matching the heatmap look.
 const STOPS = [[68, 1, 84], [59, 82, 139], [33, 144, 141], [93, 201, 99], [253, 231, 37]];
 function colormap(t: number) {
   t = Math.max(0, Math.min(1, t));
@@ -78,7 +78,6 @@ export default function WhaleLiquidationMap() {
 
   useEffect(() => { if (!coin && coinOpts.length) setCoin(coinOpts[0].value); }, [coin, coinOpts]);
 
-  // candles for the heatmap
   useEffect(() => {
     if (!coin) return;
     let alive = true;
@@ -101,7 +100,6 @@ export default function WhaleLiquidationMap() {
   const mark = n(mids[coin]);
   const longTotal = levels.filter((l) => l.long).reduce((s, l) => s + l.value, 0);
   const shortTotal = levels.filter((l) => !l.long).reduce((s, l) => s + l.value, 0);
-
   const empty = coinOpts.length === 0;
 
   return (
@@ -140,7 +138,7 @@ export default function WhaleLiquidationMap() {
 
       <p className="mt-3 text-[11px] text-slate-500">
         {view === "heatmap"
-          ? "Live Hyperliquid candles with tracked-whale liquidation clusters overlaid (brighter = more $ liquidating at that price)."
+          ? "Live Hyperliquid candles with tracked-whale liquidation clusters overlaid (brighter = more $ liquidating). Right curve = cumulative liq if price reaches that level."
           : view === "cascade"
             ? "Cumulative whale $ force-closed as price moves — steep steps are liquidation magnets."
             : "Every tracked-whale liquidation price, bucketed. Real Hyperliquid liquidationPx."}
@@ -149,25 +147,50 @@ export default function WhaleLiquidationMap() {
   );
 }
 
-/* ── Heatmap: candles + liquidation bands ────────────────────────────────── */
+/* Heatmap: candles + liquidation bands + zoom/pan + right cumulative curve */
 function Heatmap({ candles, levels, mark }: { candles: Candle[]; levels: Level[]; mark: number }) {
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState(0);
+  const [showCurve, setShowCurve] = useState(true);
+  const svgRef = useRef<SVGSVGElement>(null);
+  const dragging = useRef(false);
+
+  const W = 900, H = 380, T = 8, B = 24, RLAB = 52, CURVE = 92, GAP = 8;
+  const plotL = 42;
+  const plotR = W - RLAB - (showCurve ? CURVE : 0);
+  const plotT = T, plotB = H - B, pw = plotR - plotL, ph = plotB - plotT;
+
+  // wheel zoom (native + non-passive so we can stop the page from scrolling)
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      setZoom((z) => Math.max(1, Math.min(12, z * (e.deltaY < 0 ? 1.15 : 1 / 1.15))));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [candles.length]);
+
   if (candles.length < 2) return <Msg text="Loading price history…" />;
-  const W = 860, H = 380, L = 46, R = 60, T = 8, B = 24;
-  const plotL = L, plotR = W - R, plotT = T, plotB = H - B, pw = plotR - plotL, ph = plotB - plotT;
-  let pmin = Math.min(...candles.map((c) => c.l));
-  let pmax = Math.max(...candles.map((c) => c.h));
-  // Widen to include nearby whale liq clusters (±10% of mark) so bands are
-  // visible — like Coinglass' wider price window — while ignoring far outliers.
+
+  // auto price window (candles + nearby whale liq clusters), then zoom/pan
+  let amin = Math.min(...candles.map((c) => c.l));
+  let amax = Math.max(...candles.map((c) => c.h));
   if (mark > 0) {
     const near = levels.filter((l) => l.price >= mark * 0.9 && l.price <= mark * 1.1).map((l) => l.price);
-    if (near.length) { pmin = Math.min(pmin, ...near); pmax = Math.max(pmax, ...near); }
+    if (near.length) { amin = Math.min(amin, ...near); amax = Math.max(amax, ...near); }
   }
-  const pad = (pmax - pmin) * 0.06 || 1;
-  pmin -= pad; pmax += pad;
+  const apad = (amax - amin) * 0.06 || 1;
+  amin -= apad; amax += apad;
+  const autoMid = (amin + amax) / 2, autoHalf = Math.max(1, (amax - amin) / 2);
+  const visHalf = autoHalf / zoom, visMid = autoMid + pan * autoHalf;
+  const pmin = visMid - visHalf, pmax = visMid + visHalf;
+
   const y = (p: number) => plotT + (1 - (p - pmin) / (pmax - pmin)) * ph;
   const x = (i: number) => plotL + (i / (candles.length - 1)) * pw;
 
-  const NB = 90, step = (pmax - pmin) / NB;
+  const NB = 100, step = (pmax - pmin) / NB;
   const buckets = new Array(NB).fill(0);
   for (const l of levels) {
     if (l.price < pmin || l.price > pmax) continue;
@@ -178,51 +201,94 @@ function Heatmap({ candles, levels, mark }: { candles: Candle[]; levels: Level[]
   const ticks = Array.from({ length: 6 }, (_, i) => pmin + ((pmax - pmin) * i) / 5);
   const timeIdx = [0, Math.floor(candles.length / 3), Math.floor((2 * candles.length) / 3), candles.length - 1];
 
+  // right-side cumulative liquidation curve
+  const curveL = plotR + GAP, curveW = CURVE - GAP - 4;
+  const NC = 120;
+  const cLong = (p: number) => levels.filter((l) => l.long && l.price >= p).reduce((s, l) => s + l.value, 0);
+  const cShort = (p: number) => levels.filter((l) => !l.long && l.price <= p).reduce((s, l) => s + l.value, 0);
+  const curvePts = Array.from({ length: NC }, (_, i) => {
+    const p = pmin + ((pmax - pmin) * i) / (NC - 1);
+    return { p, v: mark && p <= mark ? cLong(p) : cShort(p) };
+  });
+  const maxC = Math.max(...curvePts.map((d) => d.v), 1);
+  const cx = (v: number) => curveL + (v / maxC) * curveW;
+  const green = curvePts.filter((d) => d.p <= mark);
+  const red = curvePts.filter((d) => d.p > mark);
+  const areaPath = (pts: { p: number; v: number }[]) =>
+    pts.length ? `M${curveL},${y(pts[0].p)} ` + pts.map((d) => `L${cx(d.v)},${y(d.p)}`).join(" ") + ` L${curveL},${y(pts[pts.length - 1].p)} Z` : "";
+
+  const onMove = (e: React.MouseEvent) => {
+    if (!dragging.current || !svgRef.current) return;
+    const dyVB = (e.movementY / svgRef.current.clientHeight) * H;
+    setPan((pn) => Math.max(-3, Math.min(3, pn + (dyVB / ph) * (2 / zoom))));
+  };
+
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 380 }}>
-      {/* purple base */}
-      <rect x={plotL} y={plotT} width={pw} height={ph} fill={colormap(0)} />
-      {/* liquidation bands (full width) */}
-      {buckets.map((v, i) =>
-        v > 0 ? <rect key={i} x={plotL} y={y(pmin + (i + 1) * step)} width={pw} height={Math.max(1, ph / NB + 0.5)} fill={colormap(Math.sqrt(v / maxB))} opacity={0.9} /> : null,
-      )}
-      {/* candles */}
-      {candles.map((c, i) => {
-        const up = c.c >= c.o;
-        const col = up ? "#e5e7eb" : "#f87171";
-        const yo = y(c.o), yc = y(c.c);
-        return (
-          <g key={i}>
-            <line x1={x(i)} y1={y(c.h)} x2={x(i)} y2={y(c.l)} stroke={col} strokeWidth={0.6} opacity={0.85} />
-            <rect x={x(i) - bw / 2} y={Math.min(yo, yc)} width={bw} height={Math.max(1, Math.abs(yc - yo))} fill={col} opacity={0.9} />
-          </g>
-        );
-      })}
-      {/* mark line */}
-      {mark > 0 && mark >= pmin && mark <= pmax && (
-        <g>
-          <line x1={plotL} y1={y(mark)} x2={plotR} y2={y(mark)} stroke="#fff" strokeDasharray="3 3" strokeWidth={1} opacity={0.7} />
-          <rect x={plotR - 2} y={y(mark) - 8} width={R} height={16} fill="#1f2937" />
-          <text x={plotR + 4} y={y(mark) + 4} fill="#fff" fontSize={10} fontWeight={700}>{priceFmt(mark)}</text>
+    <div className="relative">
+      <div className="absolute right-1 top-1 z-10 flex items-center gap-2">
+        <label className="flex cursor-pointer items-center gap-1 text-[11px] text-slate-400">
+          <input type="checkbox" checked={showCurve} onChange={(e) => setShowCurve(e.target.checked)} className="accent-brand-400" /> Liq curve
+        </label>
+        <button onClick={() => { setZoom(1); setPan(0); }} className="rounded border border-white/10 px-2 py-0.5 text-[11px] text-slate-400 hover:text-white">Reset</button>
+      </div>
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${W} ${H}`}
+        className="w-full cursor-grab select-none active:cursor-grabbing"
+        style={{ height: 380 }}
+        onMouseDown={() => { dragging.current = true; }}
+        onMouseUp={() => { dragging.current = false; }}
+        onMouseLeave={() => { dragging.current = false; }}
+        onMouseMove={onMove}
+      >
+        <defs>
+          <clipPath id="lqclip"><rect x={plotL} y={plotT} width={pw} height={ph} /></clipPath>
+          <linearGradient id="cmap" x1="0" y1="1" x2="0" y2="0">
+            {STOPS.map((s, i) => <stop key={i} offset={`${(i / (STOPS.length - 1)) * 100}%`} stopColor={`rgb(${s[0]},${s[1]},${s[2]})`} />)}
+          </linearGradient>
+        </defs>
+
+        <rect x={plotL} y={plotT} width={pw} height={ph} fill={colormap(0)} />
+        <g clipPath="url(#lqclip)">
+          {buckets.map((v, i) => (v > 0 ? <rect key={i} x={plotL} y={y(pmin + (i + 1) * step)} width={pw} height={Math.max(1, ph / NB + 0.6)} fill={colormap(Math.sqrt(v / maxB))} opacity={0.92} /> : null))}
+          {candles.map((c, i) => {
+            const up = c.c >= c.o, col = up ? "#e5e7eb" : "#f87171", yo = y(c.o), yc = y(c.c);
+            return (
+              <g key={i}>
+                <line x1={x(i)} y1={y(c.h)} x2={x(i)} y2={y(c.l)} stroke={col} strokeWidth={0.6} opacity={0.85} />
+                <rect x={x(i) - bw / 2} y={Math.min(yo, yc)} width={bw} height={Math.max(1, Math.abs(yc - yo))} fill={col} opacity={0.9} />
+              </g>
+            );
+          })}
+          {mark > 0 && mark >= pmin && mark <= pmax && <line x1={plotL} y1={y(mark)} x2={plotR} y2={y(mark)} stroke="#fff" strokeDasharray="3 3" strokeWidth={1} opacity={0.7} />}
         </g>
-      )}
-      {/* price ticks */}
-      {ticks.map((tv, i) => <text key={i} x={W - 4} y={y(tv) + 3} textAnchor="end" fill="#64748b" fontSize={9}>{priceFmt(tv)}</text>)}
-      {/* time ticks */}
-      {timeIdx.map((ti, i) => <text key={i} x={x(ti)} y={H - 8} textAnchor="middle" fill="#64748b" fontSize={9}>{tLabel(candles[ti].t)}</text>)}
-      {/* colormap legend */}
-      <defs>
-        <linearGradient id="cmap" x1="0" y1="1" x2="0" y2="0">
-          {STOPS.map((s, i) => <stop key={i} offset={`${(i / (STOPS.length - 1)) * 100}%`} stopColor={`rgb(${s[0]},${s[1]},${s[2]})`} />)}
-        </linearGradient>
-      </defs>
-      <rect x={10} y={plotT} width={9} height={ph} fill="url(#cmap)" rx={2} />
-      <text x={10} y={plotT - 1} fill="#94a3b8" fontSize={8}>{compact(maxB)}</text>
-    </svg>
+
+        {showCurve && (
+          <g>
+            <line x1={curveL} y1={plotT} x2={curveL} y2={plotB} stroke="rgba(255,255,255,0.12)" />
+            <path d={areaPath(green)} fill="rgba(52,211,153,0.22)" stroke="#34d399" strokeWidth={1.2} />
+            <path d={areaPath(red)} fill="rgba(248,113,113,0.22)" stroke="#f87171" strokeWidth={1.2} />
+            <text x={curveL} y={plotT - 1} fill="#64748b" fontSize={8}>cum. liq</text>
+          </g>
+        )}
+
+        {mark > 0 && mark >= pmin && mark <= pmax && (
+          <g>
+            <rect x={W - RLAB} y={y(mark) - 8} width={RLAB} height={16} fill="#1f2937" />
+            <text x={W - 4} y={y(mark) + 4} textAnchor="end" fill="#fff" fontSize={10} fontWeight={700}>{priceFmt(mark)}</text>
+          </g>
+        )}
+        {ticks.map((tv, i) => <text key={i} x={W - 4} y={y(tv) + 3} textAnchor="end" fill="#64748b" fontSize={9}>{priceFmt(tv)}</text>)}
+        {timeIdx.map((ti, i) => <text key={i} x={x(ti)} y={H - 8} textAnchor="middle" fill="#64748b" fontSize={9}>{tLabel(candles[ti].t)}</text>)}
+        <rect x={10} y={plotT} width={9} height={ph} fill="url(#cmap)" rx={2} />
+        <text x={10} y={plotT - 1} fill="#94a3b8" fontSize={8}>{compact(maxB)}</text>
+      </svg>
+      <div className="mt-1 text-center text-[10px] text-slate-600">scroll to zoom · drag to pan · {zoom.toFixed(1)}×</div>
+    </div>
   );
 }
 
-/* ── Cascade: cumulative liquidation as price moves ──────────────────────── */
+/* Cascade: cumulative liquidation as price moves */
 function Cascade({ levels, mark }: { levels: Level[]; mark: number }) {
   if (!mark || levels.length === 0) return <Msg text="No liquidation data." />;
   const longs = levels.filter((l) => l.long);
@@ -263,7 +329,7 @@ function Cascade({ levels, mark }: { levels: Level[]; mark: number }) {
   );
 }
 
-/* ── Levels: polished horizontal bars ────────────────────────────────────── */
+/* Levels: polished horizontal bars */
 function Levels({ levels, mark }: { levels: Level[]; mark: number }) {
   const NB = 22;
   const prices = levels.map((l) => l.price);
@@ -284,7 +350,7 @@ function Levels({ levels, mark }: { levels: Level[]; mark: number }) {
       {buckets.slice().reverse().map((b, ri) => {
         const i = NB - 1 - ri;
         const total = b.long + b.short;
-        const w = Math.sqrt(total / max) * 100; // sqrt tames outliers
+        const w = Math.sqrt(total / max) * 100;
         const longDom = b.long >= b.short;
         const isMark = i === markIdx;
         const dist = mark ? ((b.mid - mark) / mark) * 100 : 0;
