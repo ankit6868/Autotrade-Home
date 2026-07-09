@@ -14,6 +14,9 @@ const ALLOWED = new Set([
   "userFills", // recent fills → trading stats
   "frontendOpenOrders", // open orders
   "userFunding", // funding history
+  "historicalOrders", // recent orders + status
+  "userTwapSliceFills", // TWAP order fills
+  "userNonFundingLedgerUpdates", // deposits / withdrawals / transfers
   "metaAndAssetCtxs", // per-coin market data (funding, OI, volume, price)
   "allMids", // mid prices
 ]);
@@ -26,6 +29,9 @@ const USER_TYPES = new Set([
   "userFills",
   "frontendOpenOrders",
   "userFunding",
+  "historicalOrders",
+  "userTwapSliceFills",
+  "userNonFundingLedgerUpdates",
 ]);
 
 export const runtime = "edge";

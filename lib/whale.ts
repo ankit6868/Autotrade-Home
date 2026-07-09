@@ -127,8 +127,8 @@ export function groupTrades(fills: Fill[]): Trade[] {
   return trades.sort((a, b) => b.closeTime - a.closeTime);
 }
 
-export type Window = "1W" | "1M" | "All";
-export const windowMs = (w: Window) => (w === "1W" ? 7 : w === "1M" ? 30 : Infinity) * 86_400_000;
+export type Window = "1D" | "1W" | "1M" | "All";
+export const windowMs = (w: Window) => (w === "1D" ? 1 : w === "1W" ? 7 : w === "1M" ? 30 : Infinity) * 86_400_000;
 export const filterWindow = <T extends { closeTime: number }>(items: T[], w: Window) => {
   const cutoff = Date.now() - windowMs(w);
   return w === "All" ? items : items.filter((t) => t.closeTime >= cutoff);

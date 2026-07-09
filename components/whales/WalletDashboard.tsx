@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import {
   n, money, compact, signed, pct, sizeFmt, ago, fmtDuration,
-  groupTrades, computeStats, maxDrawdown, filterWindow,
+  groupTrades, computeStats, maxDrawdown, filterWindow, windowMs,
   type Fill, type Trade, type Window,
 } from "@/lib/whale";
 import { Donut, Bar, Dropdown } from "./ui";
@@ -28,6 +28,9 @@ type SpotBal = { coin: string; total: string; entryNtl?: string };
 type Portfolio = [string, { accountValueHistory: [number, string][]; pnlHistory: [number, string][] }][];
 type OpenOrder = { coin: string; side: string; limitPx: string; sz: string; timestamp: number; orderType?: string };
 type Funding = { time: number; delta: { coin: string; usdc: string; fundingRate: string; szi: string } };
+type HistOrder = { order: { coin: string; side: string; limitPx: string; sz: string; origSz: string; orderType?: string; timestamp: number; reduceOnly?: boolean }; status: string; statusTimestamp: number };
+type Twap = { fill: { coin: string; px: string; sz: string; side: string; time: number } };
+type Ledger = { time: number; delta: { type: string; usdc?: string; amount?: string; token?: string } };
 
 async function hl<T>(body: object): Promise<T | null> {
   try {
@@ -38,12 +41,12 @@ async function hl<T>(body: object): Promise<T | null> {
   }
 }
 
-const TIME_OPTS = [{ label: "1W", value: "1W" as Window }, { label: "1M", value: "1M" as Window }, { label: "All", value: "All" as Window }];
+const TIME_OPTS = [{ label: "1D", value: "1D" as Window }, { label: "1W", value: "1W" as Window }, { label: "1M", value: "1M" as Window }, { label: "All", value: "All" as Window }];
 const SCOPE_OPTS = [{ label: "Perp Only", value: "perp" }, { label: "Total", value: "total" }];
 const METRIC_OPTS = [{ label: "Total PnL", value: "pnl" }, { label: "Account Value", value: "value" }];
-const WIN_NAME: Record<Window, [string, string]> = { "1W": ["week", "perpWeek"], "1M": ["month", "perpMonth"], All: ["allTime", "perpAllTime"] };
+const WIN_NAME: Record<Window, [string, string]> = { "1D": ["day", "perpDay"], "1W": ["week", "perpWeek"], "1M": ["month", "perpMonth"], All: ["allTime", "perpAllTime"] };
 
-const TABS = ["Spot Holdings", "Perp Positions", "Open Orders", "Recent Fills", "Completed Trades", "Funding History"] as const;
+const TABS = ["Spot Holdings", "Perp Positions", "Open Orders", "Recent Fills", "Completed Trades", "Historical Orders", "Funding History", "TWAP", "Deposits & Withdrawals"] as const;
 type Tab = (typeof TABS)[number];
 
 /* ── two-color PnL area chart ────────────────────────────────────────────── */
@@ -103,6 +106,9 @@ export default function WalletDashboard({ address }: { address: string }) {
   const [fills, setFills] = useState<Fill[]>([]);
   const [orders, setOrders] = useState<OpenOrder[]>([]);
   const [funding, setFunding] = useState<Funding[]>([]);
+  const [histOrders, setHistOrders] = useState<HistOrder[]>([]);
+  const [twap, setTwap] = useState<Twap[]>([]);
+  const [ledger, setLedger] = useState<Ledger[]>([]);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
   const [monitored, setMonitored] = useState(false);
@@ -124,7 +130,10 @@ export default function WalletDashboard({ address }: { address: string }) {
       hl<Fill[]>({ type: "userFills", user: address }),
       hl<OpenOrder[]>({ type: "frontendOpenOrders", user: address }),
       hl<Funding[]>({ type: "userFunding", user: address, startTime: Date.now() - 30 * 86_400_000 }),
-    ]).then(([cs, sp, md, pf, fl, oo, fn]) => {
+      hl<HistOrder[]>({ type: "historicalOrders", user: address }),
+      hl<Twap[]>({ type: "userTwapSliceFills", user: address }),
+      hl<Ledger[]>({ type: "userNonFundingLedgerUpdates", user: address, startTime: Date.now() - 90 * 86_400_000 }),
+    ]).then(([cs, sp, md, pf, fl, oo, fn, ho, tw, lg]) => {
       if (!alive) return;
       setState(cs);
       setSpot((sp?.balances || []).filter((b) => n(b.total) > 0));
@@ -133,6 +142,9 @@ export default function WalletDashboard({ address }: { address: string }) {
       setFills(Array.isArray(fl) ? fl : []);
       setOrders(Array.isArray(oo) ? oo : []);
       setFunding(Array.isArray(fn) ? fn : []);
+      setHistOrders(Array.isArray(ho) ? ho : []);
+      setTwap(Array.isArray(tw) ? tw : []);
+      setLedger(Array.isArray(lg) ? lg : []);
       setLoading(false);
     });
     return () => { alive = false; };
@@ -175,9 +187,14 @@ export default function WalletDashboard({ address }: { address: string }) {
   const chartLast = chartSeries.length ? n(chartSeries[chartSeries.length - 1][1]) : 0;
   const perfTrades = useMemo(() => filterWindow(trades, win), [trades, win]);
   const perf = useMemo(() => computeStats(perfTrades), [perfTrades]);
-  const cutoff = Date.now() - (win === "1W" ? 7 : win === "1M" ? 30 : 3650) * 86_400_000;
+  const cutoff = Date.now() - windowMs(win);
   const tradeCount = fills.filter((f) => f.time >= cutoff).length;
   const mdd = maxDrawdown(chartEntry?.[1].accountValueHistory);
+
+  // Derived trader tags (from real fills / drawdown / exposure).
+  const allStats = useMemo(() => computeStats(trades), [trades]);
+  const allMdd = maxDrawdown(portfolio?.find((p) => p[0] === "perpAllTime")?.[1].accountValueHistory);
+  const tags = useMemo(() => deriveTags(allStats, allMdd, longPct, positions.length), [allStats, allMdd, longPct, positions.length]);
 
   const copy = () => { navigator.clipboard?.writeText(address); setCopied(true); setTimeout(() => setCopied(false), 1200); };
   const toggleMonitor = () => {
@@ -195,8 +212,17 @@ export default function WalletDashboard({ address }: { address: string }) {
       <div className="mb-6 flex flex-wrap items-center gap-3">
         <Link href="/whales" className="btn-ghost !px-3 !py-2 !text-sm"><ArrowLeft className="h-4 w-4" /> Back</Link>
         <span className="grid h-9 w-9 place-items-center rounded-full bg-gradient-to-br from-brand-400 to-iris-500 text-xs font-bold text-ink-950">{address.slice(2, 4).toUpperCase()}</span>
-        <span className="font-mono text-lg font-semibold text-white">{address.slice(0, 6)}…{address.slice(-4)}</span>
-        <button onClick={copy} className="text-slate-400 hover:text-white">{copied ? <Check className="h-4 w-4 text-ok" /> : <Copy className="h-4 w-4" />}</button>
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-lg font-semibold text-white">{address.slice(0, 6)}…{address.slice(-4)}</span>
+            <button onClick={copy} className="text-slate-400 hover:text-white">{copied ? <Check className="h-4 w-4 text-ok" /> : <Copy className="h-4 w-4" />}</button>
+          </div>
+          {tags.length > 0 && (
+            <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] font-semibold">
+              {tags.map(([label, tone]) => <span key={label} className={TAG_TONE[tone]}>{label}</span>)}
+            </div>
+          )}
+        </div>
 
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <button onClick={() => setShowStats(true)} className="btn-ghost !px-3.5 !py-2 !text-[13px]"><BarChart3 className="h-4 w-4" /> Trading Statistics</button>
@@ -311,7 +337,7 @@ export default function WalletDashboard({ address }: { address: string }) {
           <div className="mt-4 glass overflow-hidden">
             <div className="flex gap-1 overflow-x-auto border-b border-white/[0.06] px-2">
               {TABS.map((t) => {
-                const count = t === "Spot Holdings" ? spot.length : t === "Perp Positions" ? positions.length : t === "Open Orders" ? orders.length : t === "Completed Trades" ? trades.length : t === "Funding History" ? funding.length : undefined;
+                const count = t === "Spot Holdings" ? spot.length : t === "Perp Positions" ? positions.length : t === "Open Orders" ? orders.length : t === "Completed Trades" ? trades.length : t === "Historical Orders" ? histOrders.length : t === "Funding History" ? funding.length : t === "TWAP" ? twap.length : t === "Deposits & Withdrawals" ? ledger.length : undefined;
                 return (
                   <button key={t} onClick={() => setTab(t)} className={`whitespace-nowrap border-b-2 px-3 py-3 text-[13px] font-semibold transition-colors ${tab === t ? "border-brand-400 text-white" : "border-transparent text-slate-500 hover:text-slate-300"}`}>
                     {t}{count != null ? ` (${count})` : ""}
@@ -319,7 +345,7 @@ export default function WalletDashboard({ address }: { address: string }) {
                 );
               })}
             </div>
-            <div className="overflow-x-auto p-1">{renderTab(tab, { positions, spot, mid, orders, fills, trades, funding })}</div>
+            <div className="overflow-x-auto p-1">{renderTab(tab, { positions, spot, mid, orders, fills, trades, funding, histOrders, twap, ledger })}</div>
           </div>
 
           <p className="mt-4 text-center text-[11px] text-slate-500">
@@ -336,7 +362,7 @@ export default function WalletDashboard({ address }: { address: string }) {
 /* ── tab bodies ──────────────────────────────────────────────────────────── */
 function renderTab(
   tab: Tab,
-  d: { positions: Pos[]; spot: SpotBal[]; mid: (c: string) => number; orders: OpenOrder[]; fills: Fill[]; trades: Trade[]; funding: Funding[] },
+  d: { positions: Pos[]; spot: SpotBal[]; mid: (c: string) => number; orders: OpenOrder[]; fills: Fill[]; trades: Trade[]; funding: Funding[]; histOrders: HistOrder[]; twap: Twap[]; ledger: Ledger[] },
 ) {
   const H = ({ cols }: { cols: string[] }) => (
     <thead className="text-[11px] uppercase tracking-wide text-slate-500">
@@ -452,23 +478,121 @@ function renderTab(
       </table>
     );
 
-  // Funding History
-  return d.funding.length === 0 ? empty("No funding payments in the last 30 days.") : (
+  if (tab === "Historical Orders")
+    return d.histOrders.length === 0 ? empty("No recent orders.") : (
+      <table className="w-full text-[13px]">
+        <H cols={["Time", "Asset", "Side", "Type", "Price", "Size", "Status"]} />
+        <tbody className="tabular">
+          {d.histOrders.slice(0, 60).map((h, i) => {
+            const o = h.order;
+            return (
+              <tr key={i} className="border-t border-white/[0.05]">
+                <td className="px-3 py-2.5 text-left text-slate-400">{ago(h.statusTimestamp || o.timestamp)}</td>
+                <td className="px-3 py-2.5 text-right font-semibold text-white">{o.coin}</td>
+                <td className={`px-3 py-2.5 text-right font-semibold ${o.side === "B" ? "text-ok" : "text-danger"}`}>{o.side === "B" ? "Buy" : "Sell"}</td>
+                <td className="px-3 py-2.5 text-right text-slate-400">{o.orderType || "—"}{o.reduceOnly ? " · RO" : ""}</td>
+                <td className="px-3 py-2.5 text-right text-slate-300">{money(n(o.limitPx))}</td>
+                <td className="px-3 py-2.5 text-right text-slate-300">{sizeFmt(n(o.origSz || o.sz))}</td>
+                <td className="px-3 py-2.5 text-right capitalize text-slate-400">{h.status}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    );
+
+  if (tab === "Funding History")
+    return d.funding.length === 0 ? empty("No funding payments in the last 30 days.") : (
+      <table className="w-full text-[13px]">
+        <H cols={["Time", "Asset", "Payment", "Rate"]} />
+        <tbody className="tabular">
+          {d.funding.slice(0, 60).map((f, i) => {
+            const usd = n(f.delta?.usdc);
+            return (
+              <tr key={i} className="border-t border-white/[0.05]">
+                <td className="px-3 py-2.5 text-left text-slate-400">{ago(f.time)}</td>
+                <td className="px-3 py-2.5 text-right font-semibold text-white">{f.delta?.coin}</td>
+                <td className={`px-3 py-2.5 text-right ${usd >= 0 ? "text-ok" : "text-danger"}`}>{signed(usd, 4)}</td>
+                <td className="px-3 py-2.5 text-right text-slate-400">{(n(f.delta?.fundingRate) * 100).toFixed(4)}%</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    );
+
+  if (tab === "TWAP")
+    return d.twap.length === 0 ? empty("No TWAP orders in recent activity.") : (
+      <table className="w-full text-[13px]">
+        <H cols={["Time", "Asset", "Side", "Price", "Size"]} />
+        <tbody className="tabular">
+          {d.twap.slice(0, 60).map((t, i) => (
+            <tr key={i} className="border-t border-white/[0.05]">
+              <td className="px-3 py-2.5 text-left text-slate-400">{ago(t.fill?.time)}</td>
+              <td className="px-3 py-2.5 text-right font-semibold text-white">{t.fill?.coin}</td>
+              <td className={`px-3 py-2.5 text-right font-semibold ${t.fill?.side === "B" ? "text-ok" : "text-danger"}`}>{t.fill?.side === "B" ? "Buy" : "Sell"}</td>
+              <td className="px-3 py-2.5 text-right text-slate-300">{money(n(t.fill?.px))}</td>
+              <td className="px-3 py-2.5 text-right text-slate-300">{sizeFmt(n(t.fill?.sz))}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    );
+
+  // Deposits & Withdrawals (non-funding ledger)
+  return d.ledger.length === 0 ? empty("No deposits, withdrawals or transfers in the last 90 days.") : (
     <table className="w-full text-[13px]">
-      <H cols={["Time", "Asset", "Payment", "Rate"]} />
+      <H cols={["Time", "Type", "Amount"]} />
       <tbody className="tabular">
-        {d.funding.slice(0, 60).map((f, i) => {
-          const usd = n(f.delta?.usdc);
+        {d.ledger.slice(0, 60).map((l, i) => {
+          const amt = n(l.delta?.usdc ?? l.delta?.amount);
+          const outgoing = /send|withdraw/i.test(l.delta?.type || "");
+          const val = outgoing ? -Math.abs(amt) : amt;
           return (
             <tr key={i} className="border-t border-white/[0.05]">
-              <td className="px-3 py-2.5 text-left text-slate-400">{ago(f.time)}</td>
-              <td className="px-3 py-2.5 text-right font-semibold text-white">{f.delta?.coin}</td>
-              <td className={`px-3 py-2.5 text-right ${usd >= 0 ? "text-ok" : "text-danger"}`}>{signed(usd, 4)}</td>
-              <td className="px-3 py-2.5 text-right text-slate-400">{(n(f.delta?.fundingRate) * 100).toFixed(4)}%</td>
+              <td className="px-3 py-2.5 text-left text-slate-400">{ago(l.time)}</td>
+              <td className="px-3 py-2.5 text-right capitalize text-slate-300">{(l.delta?.type || "—").replace(/([A-Z])/g, " $1").trim()}</td>
+              <td className={`px-3 py-2.5 text-right font-semibold ${val >= 0 ? "text-ok" : "text-danger"}`}>{signed(val)}</td>
             </tr>
           );
         })}
       </tbody>
     </table>
   );
+}
+
+/* ── trader tags (derived from real data) ───────────────────────────────── */
+const TAG_TONE: Record<string, string> = {
+  ok: "text-ok", danger: "text-danger", brand: "text-brand-300", iris: "text-iris-400", slate: "text-slate-400",
+};
+
+function deriveTags(
+  s: ReturnType<typeof computeStats>,
+  mdd: number,
+  longPct: number,
+  openCount: number,
+): [string, string][] {
+  const tags: [string, string][] = [];
+  if (openCount > 0) {
+    if (longPct >= 65) tags.push(["Bullish", "ok"]);
+    else if (longPct <= 35) tags.push(["Bearish", "danger"]);
+    else tags.push(["Neutral", "slate"]);
+  }
+  if (s.count >= 3) {
+    if (s.winRate >= 60) tags.push(["Shark", "brand"]);
+    else if (s.winRate <= 35) tags.push(["Struggling", "danger"]);
+    const h = s.avgHold;
+    if (h > 0 && h < 3_600_000) tags.push(["Scalper", "iris"]);
+    else if (h >= 86_400_000) tags.push(["Swinger", "iris"]);
+    else if (h > 0) tags.push(["Day Trader", "iris"]);
+    if (Math.abs(s.net) < 500) tags.push(["Breakeven", "slate"]);
+    else if (s.net >= 5000) tags.push(["Big Gain", "ok"]);
+    else if (s.net > 0) tags.push(["Small Gain", "ok"]);
+    else tags.push(["In Loss", "danger"]);
+  }
+  if (mdd > 0) {
+    if (mdd < 20) tags.push(["Low DD", "ok"]);
+    else if (mdd > 60) tags.push(["High DD", "danger"]);
+  }
+  return tags;
 }
