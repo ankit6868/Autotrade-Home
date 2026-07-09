@@ -156,7 +156,13 @@ function Heatmap({ candles, levels, mark }: { candles: Candle[]; levels: Level[]
   const plotL = L, plotR = W - R, plotT = T, plotB = H - B, pw = plotR - plotL, ph = plotB - plotT;
   let pmin = Math.min(...candles.map((c) => c.l));
   let pmax = Math.max(...candles.map((c) => c.h));
-  const pad = (pmax - pmin) * 0.08 || 1;
+  // Widen to include nearby whale liq clusters (±10% of mark) so bands are
+  // visible — like Coinglass' wider price window — while ignoring far outliers.
+  if (mark > 0) {
+    const near = levels.filter((l) => l.price >= mark * 0.9 && l.price <= mark * 1.1).map((l) => l.price);
+    if (near.length) { pmin = Math.min(pmin, ...near); pmax = Math.max(pmax, ...near); }
+  }
+  const pad = (pmax - pmin) * 0.06 || 1;
   pmin -= pad; pmax += pad;
   const y = (p: number) => plotT + (1 - (p - pmin) / (pmax - pmin)) * ph;
   const x = (i: number) => plotL + (i / (candles.length - 1)) * pw;
