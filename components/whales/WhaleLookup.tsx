@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { Search, Loader2, TrendingUp, TrendingDown, AlertCircle } from "lucide-react";
 
 type Pos = {
@@ -156,9 +157,14 @@ export default function WhaleLookup() {
               </table>
             </div>
           )}
-          <p className="mt-2 text-[11px] text-slate-500">
-            Live from Hyperliquid · {scanned.slice(0, 6)}…{scanned.slice(-4)} · read-only, no sign-up.
-          </p>
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-[11px] text-slate-500">
+              Live from Hyperliquid · {scanned.slice(0, 6)}…{scanned.slice(-4)} · read-only, no sign-up.
+            </p>
+            <Link href={`/whales/${scanned}`} className="text-[12px] font-semibold text-brand-300 hover:text-brand-200">
+              View full dashboard →
+            </Link>
+          </div>
         </div>
       )}
     </div>
