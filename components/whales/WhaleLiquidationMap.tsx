@@ -154,6 +154,7 @@ function Heatmap({ candles, levels, mark }: { candles: Candle[]; levels: Level[]
   const [showCurve, setShowCurve] = useState(true);
   const svgRef = useRef<SVGSVGElement>(null);
   const dragging = useRef(false);
+  const [hover, setHover] = useState<{ x: number; y: number } | null>(null);
 
   const W = 900, H = 380, T = 8, B = 24, RLAB = 52, CURVE = 92, GAP = 8;
   const plotL = 42;
@@ -199,7 +200,15 @@ function Heatmap({ candles, levels, mark }: { candles: Candle[]; levels: Level[]
   const maxB = Math.max(...buckets, 1);
   const bw = Math.max(1, (pw / candles.length) * 0.6);
   const ticks = Array.from({ length: 6 }, (_, i) => pmin + ((pmax - pmin) * i) / 5);
-  const timeIdx = [0, Math.floor(candles.length / 3), Math.floor((2 * candles.length) / 3), candles.length - 1];
+  const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
+  const spanH = (candles[candles.length - 1].t - candles[0].t) / 3600e3;
+  const multiDay = spanH > 26;
+  const tickLabel = (t: number) => {
+    const d = new Date(t);
+    const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    return multiDay ? `${d.getMonth() + 1}/${d.getDate()} ${hm}` : hm;
+  };
+  const timeIdx = [0, 0.2, 0.4, 0.6, 0.8, 1].map((f) => Math.round(f * (candles.length - 1)));
 
   // right-side cumulative liquidation curve
   const curveL = plotR + GAP, curveW = CURVE - GAP - 4;
@@ -218,10 +227,23 @@ function Heatmap({ candles, levels, mark }: { candles: Candle[]; levels: Level[]
     pts.length ? `M${curveL},${y(pts[0].p)} ` + pts.map((d) => `L${cx(d.v)},${y(d.p)}`).join(" ") + ` L${curveL},${y(pts[pts.length - 1].p)} Z` : "";
 
   const onMove = (e: React.MouseEvent) => {
-    if (!dragging.current || !svgRef.current) return;
-    const dyVB = (e.movementY / svgRef.current.clientHeight) * H;
-    setPan((pn) => Math.max(-3, Math.min(3, pn + (dyVB / ph) * (2 / zoom))));
+    const el = svgRef.current;
+    if (!el) return;
+    if (dragging.current) {
+      const dyVB = (e.movementY / el.clientHeight) * H;
+      setPan((pn) => clamp(pn + (dyVB / ph) * (2 / zoom), -3, 3));
+      if (hover) setHover(null);
+      return;
+    }
+    const box = el.getBoundingClientRect();
+    const vx = ((e.clientX - box.left) / box.width) * W;
+    const vy = ((e.clientY - box.top) / box.height) * H;
+    setHover(vx >= plotL && vx <= plotR && vy >= plotT && vy <= plotB ? { x: vx, y: vy } : null);
   };
+  const hoverPrice = hover ? pmin + (1 - (hover.y - plotT) / ph) * (pmax - pmin) : 0;
+  const hoverIdx = hover ? clamp(Math.round(((hover.x - plotL) / pw) * (candles.length - 1)), 0, candles.length - 1) : 0;
+  const hoverBucket = hover ? buckets[clamp(Math.floor((hoverPrice - pmin) / step), 0, NB - 1)] : 0;
+  const hoverCum = hover ? (hoverPrice <= mark ? cLong(hoverPrice) : cShort(hoverPrice)) : 0;
 
   return (
     <div className="relative">
@@ -238,7 +260,7 @@ function Heatmap({ candles, levels, mark }: { candles: Candle[]; levels: Level[]
         style={{ height: 380 }}
         onMouseDown={() => { dragging.current = true; }}
         onMouseUp={() => { dragging.current = false; }}
-        onMouseLeave={() => { dragging.current = false; }}
+        onMouseLeave={() => { dragging.current = false; setHover(null); }}
         onMouseMove={onMove}
       >
         <defs>
@@ -279,11 +301,33 @@ function Heatmap({ candles, levels, mark }: { candles: Candle[]; levels: Level[]
           </g>
         )}
         {ticks.map((tv, i) => <text key={i} x={W - 4} y={y(tv) + 3} textAnchor="end" fill="#64748b" fontSize={9}>{priceFmt(tv)}</text>)}
-        {timeIdx.map((ti, i) => <text key={i} x={x(ti)} y={H - 8} textAnchor="middle" fill="#64748b" fontSize={9}>{tLabel(candles[ti].t)}</text>)}
+        {timeIdx.map((ti, i) => <text key={i} x={x(ti)} y={H - 8} textAnchor="middle" fill="#64748b" fontSize={9}>{tickLabel(candles[ti].t)}</text>)}
+
+        {hover && (
+          <g pointerEvents="none">
+            <line x1={plotL} y1={hover.y} x2={plotR} y2={hover.y} stroke="rgba(255,255,255,0.28)" strokeWidth={0.6} />
+            <line x1={hover.x} y1={plotT} x2={hover.x} y2={plotB} stroke="rgba(255,255,255,0.28)" strokeWidth={0.6} />
+            {(() => {
+              const tw = 172, th = 64;
+              const tx = clamp(hover.x + 12, plotL, plotR - tw);
+              const ty = clamp(hover.y - th - 6, plotT, plotB - th);
+              return (
+                <g>
+                  <rect x={tx} y={ty} width={tw} height={th} rx={5} fill="#0b1220" stroke="rgba(255,255,255,0.14)" />
+                  <text x={tx + 9} y={ty + 15} fill="#cbd5e1" fontSize={9}>{new Date(candles[hoverIdx].t).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</text>
+                  <text x={tx + 9} y={ty + 30} fill="#94a3b8" fontSize={9}>Price <tspan fill="#fff" fontWeight="700">{priceFmt(hoverPrice)}</tspan></text>
+                  <text x={tx + 9} y={ty + 44} fill="#94a3b8" fontSize={9}>Whale liq here <tspan fill="#facc15">{hoverBucket > 0 ? compact(hoverBucket) : "—"}</tspan></text>
+                  <text x={tx + 9} y={ty + 58} fill="#94a3b8" fontSize={9}>Cum. to price <tspan fill={hoverPrice <= mark ? "#34d399" : "#f87171"}>{compact(hoverCum)}</tspan></text>
+                </g>
+              );
+            })()}
+          </g>
+        )}
+
         <rect x={10} y={plotT} width={9} height={ph} fill="url(#cmap)" rx={2} />
         <text x={10} y={plotT - 1} fill="#94a3b8" fontSize={8}>{compact(maxB)}</text>
       </svg>
-      <div className="mt-1 text-center text-[10px] text-slate-600">scroll to zoom · drag to pan · {zoom.toFixed(1)}×</div>
+      <div className="mt-1 text-center text-[10px] text-slate-600">scroll to zoom · drag to pan · hover for details · {zoom.toFixed(1)}×</div>
     </div>
   );
 }
