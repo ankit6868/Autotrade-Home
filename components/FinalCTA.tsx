@@ -14,7 +14,7 @@ export default function FinalCTA() {
     <section className="section">
       <div className="container">
         <Reveal>
-          <div className="relative overflow-hidden rounded-3xl border border-white/[0.08] bg-gradient-to-b from-ink-800 to-ink-950 p-8 text-center shadow-card sm:p-14">
+          <div className="gradient-border relative overflow-hidden rounded-3xl border border-white/[0.08] bg-gradient-to-b from-ink-800 to-ink-950 p-8 text-center shadow-card sm:p-14">
             <div className="pointer-events-none absolute inset-0 -z-10 bg-grid opacity-60" />
             <div className="pointer-events-none absolute left-1/2 top-0 -z-10 h-72 w-[640px] -translate-x-1/2 rounded-full bg-brand-500/20 blur-[120px]" />
 

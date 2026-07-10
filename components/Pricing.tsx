@@ -68,7 +68,7 @@ export default function Pricing() {
               <Reveal key={p.id} delay={i * 0.07}>
                 <div
                   className={`glass glass-hover relative flex h-full flex-col p-6 ${a.ring} ${
-                    p.highlight ? `${a.glowBorder} shadow-glow` : ""
+                    p.highlight ? `${a.glowBorder} shadow-glow gradient-border` : ""
                   }`}
                 >
                   {p.badge && (
