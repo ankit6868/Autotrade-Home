@@ -29,11 +29,12 @@ const steps = [
 export default function Hero() {
   return (
     <section id="top" className="relative overflow-hidden pt-28 sm:pt-36">
-      {/* ambient background */}
-      <div className="pointer-events-none absolute inset-0 -z-10">
+      {/* ambient animated aurora */}
+      <div className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
         <div className="absolute inset-0 bg-grid" />
-        <div className="absolute left-1/2 top-0 h-[420px] w-[820px] -translate-x-1/2 rounded-full bg-brand-500/20 blur-[120px]" />
-        <div className="absolute right-[8%] top-[30%] h-[280px] w-[280px] rounded-full bg-iris-500/20 blur-[110px]" />
+        <div className="animate-aurora-center absolute left-1/2 top-[-4%] h-[440px] w-[860px] rounded-full bg-brand-500/25 blur-[130px]" />
+        <div className="animate-aurora absolute right-[6%] top-[26%] h-[300px] w-[300px] rounded-full bg-iris-500/25 blur-[120px]" />
+        <div className="animate-aurora absolute left-[8%] top-[46%] h-[240px] w-[240px] rounded-full bg-sky-400/15 blur-[120px]" style={{ animationDelay: "-8s" }} />
       </div>
 
       <div className="container grid items-center gap-14 pb-16 lg:grid-cols-[1.05fr_0.95fr] lg:pb-24">

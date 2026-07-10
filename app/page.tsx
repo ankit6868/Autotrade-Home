@@ -1,5 +1,6 @@
 import Header from "@/components/Header";
 import Hero from "@/components/Hero";
+import PriceTicker from "@/components/PriceTicker";
 import ProofStrip from "@/components/ProofStrip";
 import Problem from "@/components/Problem";
 import Companion from "@/components/Companion";
@@ -21,6 +22,7 @@ export default function Home() {
       <main>
         {/* A — Hero & immediate proof */}
         <Hero />
+        <PriceTicker />
         <ProofStrip />
         {/* Live whale tracker (real Hyperliquid data) */}
         <WhaleSection />

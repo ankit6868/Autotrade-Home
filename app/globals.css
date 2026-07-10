@@ -184,6 +184,46 @@
   }
 }
 
+@keyframes aurora-center {
+  0%,
+  100% {
+    transform: translate(-50%, 0) scale(1);
+    opacity: 0.85;
+  }
+  50% {
+    transform: translate(-50%, -5%) scale(1.12);
+    opacity: 1;
+  }
+}
+@keyframes aurora-drift {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+    opacity: 0.8;
+  }
+  50% {
+    transform: translate(4%, -5%) scale(1.14);
+    opacity: 1;
+  }
+}
+@keyframes marquee {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+.animate-aurora-center {
+  animation: aurora-center 16s ease-in-out infinite;
+}
+.animate-aurora {
+  animation: aurora-drift 18s ease-in-out infinite;
+}
+.animate-marquee {
+  animation: marquee 42s linear infinite;
+}
+
 /* Respect reduced-motion: kill decorative loops + reveals (content-map motion rule 3). */
 @media (prefers-reduced-motion: reduce) {
   *,

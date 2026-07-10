@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
+import PriceTicker from "@/components/PriceTicker";
 import WhaleLookup from "@/components/whales/WhaleLookup";
 import WhaleFeed from "@/components/whales/WhaleFeed";
 import WhaleMarkets from "@/components/whales/WhaleMarkets";
@@ -20,9 +21,10 @@ export default function WhalesPage() {
       <main className="pt-24">
         {/* Hero + wallet lookup */}
         <section className="relative overflow-hidden">
-          <div className="pointer-events-none absolute inset-0 -z-10">
+          <div className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
             <div className="absolute inset-0 bg-grid" />
-            <div className="absolute left-1/3 top-0 h-[360px] w-[720px] -translate-x-1/2 rounded-full bg-brand-500/15 blur-[120px]" />
+            <div className="animate-aurora-center absolute left-1/3 top-0 h-[380px] w-[740px] rounded-full bg-brand-500/18 blur-[120px]" />
+            <div className="animate-aurora absolute right-[10%] top-[20%] h-[240px] w-[240px] rounded-full bg-iris-500/18 blur-[120px]" style={{ animationDelay: "-7s" }} />
           </div>
           <div className="container py-12 sm:py-16">
             <span className="chip mb-5">
@@ -42,14 +44,16 @@ export default function WhalesPage() {
               volume — all from Hyperliquid&apos;s public data. No sign-up.
             </p>
 
-            <div className="glass mt-8 max-w-3xl p-5 shadow-card sm:p-6">
+            <div className="glass gradient-border mt-8 max-w-3xl p-5 shadow-card sm:p-6">
               <WhaleLookup />
             </div>
           </div>
         </section>
 
+        <PriceTicker />
+
         {/* Tracked-whale aggregate + live feed */}
-        <section className="container grid gap-4 lg:grid-cols-2">
+        <section className="container grid gap-4 pt-6 lg:grid-cols-2">
           <WhaleAggregate />
           <WhaleFeed />
         </section>
