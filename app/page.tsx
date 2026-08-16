@@ -12,6 +12,7 @@ import Security from "@/components/Security";
 import Pricing from "@/components/Pricing";
 import Intelligence from "@/components/Intelligence";
 import FAQ from "@/components/FAQ";
+import Contact from "@/components/Contact";
 import FinalCTA from "@/components/FinalCTA";
 import Footer from "@/components/Footer";
 
@@ -39,6 +40,8 @@ export default function Home() {
         <Pricing />
         <Intelligence />
         <FAQ />
+        {/* New-visitor enquiry form → admin panel */}
+        <Contact />
         <FinalCTA />
       </main>
       <Footer />
