@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import { sql } from "@vercel/postgres";
-import { currentAdmin, getAdmin, verifyPassword, hashPassword } from "@/lib/db";
+import { sql, currentAdmin, getAdmin, verifyPassword, hashPassword } from "@/lib/db";
 
 // Protected: change the admin password from the Account page.
 // `current` is optional (you're already authenticated) but validated when sent.

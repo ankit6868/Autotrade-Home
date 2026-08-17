@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import { sql } from "@vercel/postgres";
-import { currentAdmin } from "@/lib/db";
+import { sql, currentAdmin } from "@/lib/db";
 
 // Protected: mark an enquiry read/new (PATCH) or delete it (DELETE).
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {

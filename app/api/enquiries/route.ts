@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import { sql } from "@vercel/postgres";
-import { initDb } from "@/lib/db";
+import { sql, initDb } from "@/lib/db";
 
 // Public: a visitor submits the "Talk to us" form on the landing page.
 export async function POST(req: Request) {

@@ -10,7 +10,7 @@ export async function POST(req: Request) {
     admin = await getAdmin();
   } catch {
     return NextResponse.json(
-      { error: "Database not reachable. Create Vercel Postgres in your project's Storage tab." },
+      { error: "Database not reachable yet. Connect a Postgres DB in Vercel → Storage, then redeploy." },
       { status: 500 },
     );
   }
